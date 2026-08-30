@@ -1,0 +1,416 @@
+                        		TITLE	"8085 Cross-Assembler Test Source File"
+                        		PAGE	60
+8085 Cross-Assembler Test Source File
+
+                        ;
+                        ; The 8085 opcodes in opcode numerical order:
+                        ;
+   0012                 BYTE		EQU	012H
+   0034                 WORD		EQU	034H
+   0056                 PORT		EQU	056H
+   7890                 ADDRESS		EQU	07890H
+                        
+U  0000   00 00         		DW	A5A5H		;error, looks like label
+                        
+                        ; 000H - 00FH.
+                        
+   0002   00            		NOP
+   0003   01 34 00      		LXI	B, WORD
+   0006   02            		STAX	B
+   0007   03            		INX	B
+   0008   04            		INR	B
+   0009   05            		DCR	B
+   000a   06 12         		MVI	B, BYTE
+   000c   07            		RLC
+                        					; 008H is undefined.
+   000d   09            		DAD	B
+   000e   0a            		LDAX	B
+   000f   0b            		DCX	B
+   0010   0c            		INR	C
+   0011   0d            		DCR	C
+   0012   0e 12         		MVI	C, BYTE
+   0014   0f            		RRC
+                        
+                        ; 010H - 01FH.
+                        
+                        					; 010H is undefined.
+   0015   11 34 00      		LXI	D, WORD
+   0018   12            		STAX	D
+   0019   13            		INX	D
+   001a   14            		INR	D
+   001b   15            		DCR	D
+   001c   16 12         		MVI	D, BYTE
+   001e   17            		RAL
+                        					; 018H is undefined.
+   001f   19            		DAD	D
+   0020   1a            		LDAX	D
+   0021   1b            		DCX	D
+   0022   1c            		INR	E
+   0023   1d            		DCR	E
+   0024   1e 12         		MVI	E, BYTE
+   0026   1f            		RAR
+                        
+                        ; 020H - 02FH.
+                        
+   0027   20            		RIM
+   0028   21 34 00      		LXI	H, WORD
+   002b   22 90 78      		SHLD	ADDRESS
+   002e   23            		INX	H
+   002f   24            		INR	H
+   0030   25            		DCR	H
+   0031   26 12         		MVI	H, BYTE
+   0033   27            		DAA
+8085 Cross-Assembler Test Source File
+
+                        					; 028H is undefined.
+   0034   29            		DAD	H
+   0035   2a 90 78      		LHLD	ADDRESS
+   0038   2b            		DCX	H
+   0039   2c            		INR	L
+   003a   2d            		DCR	L
+   003b   2e 12         		MVI	L, BYTE
+   003d   2f            		CMA
+                        
+                        ; 030H - 03FH.
+                        
+   003e   30            		SIM
+   003f   31 34 00      		LXI	SP, WORD
+   0042   32 90 78      		STA	ADDRESS
+   0045   33            		INX	SP
+   0046   34            		INR	M
+   0047   35            		DCR	M
+   0048   36 12         		MVI	M, BYTE
+   004a   37            		STC
+                        					; 038H is undefined.
+   004b   39            		DAD	SP
+   004c   3a 90 78      		LDA	ADDRESS
+   004f   3b            		DCX	SP
+   0050   3c            		INR	A
+   0051   3d            		DCR	A
+   0052   3e 12         		MVI	A, BYTE
+   0054   3f            		CMC
+                        
+                        ; 040H - 04FH.
+                        
+   0055   40            		MOV	B, B
+   0056   41            		MOV	B, C
+   0057   42            		MOV	B, D
+   0058   43            		MOV	B, E
+   0059   44            		MOV	B, H
+   005a   45            		MOV	B, L
+   005b   46            		MOV	B, M
+   005c   47            		MOV	B, A
+   005d   48            		MOV	C, B
+   005e   49            		MOV	C, C
+   005f   4a            		MOV	C, D
+   0060   4b            		MOV	C, E
+   0061   4c            		MOV	C, H
+   0062   4d            		MOV	C, L
+   0063   4e            		MOV	C, M
+   0064   4f            		MOV	C, A
+                        
+                        ; 050H - 05FH.
+                        
+   0065   50            		MOV	D, B
+   0066   51            		MOV	D, C
+   0067   52            		MOV	D, D
+   0068   53            		MOV	D, E
+   0069   54            		MOV	D, H
+   006a   55            		MOV	D, L
+   006b   56            		MOV	D, M
+   006c   57            		MOV	D, A
+   006d   58            		MOV	E, B
+8085 Cross-Assembler Test Source File
+
+   006e   59            		MOV	E, C
+   006f   5a            		MOV	E, D
+   0070   5b            		MOV	E, E
+   0071   5c            		MOV	E, H
+   0072   5d            		MOV	E, L
+   0073   5e            		MOV	E, M
+   0074   5f            		MOV	E, A
+                        
+                        ; 060H - 06FH.
+                        
+   0075   60            		MOV	H, B
+   0076   61            		MOV	H, C
+   0077   62            		MOV	H, D
+   0078   63            		MOV	H, E
+   0079   64            		MOV	H, H
+   007a   65            		MOV	H, L
+   007b   66            		MOV	H, M
+   007c   67            		MOV	H, A
+   007d   68            		MOV	L, B
+   007e   69            		MOV	L, C
+   007f   6a            		MOV	L, D
+   0080   6b            		MOV	L, E
+   0081   6c            		MOV	L, H
+   0082   6d            		MOV	L, L
+   0083   6e            		MOV	L, M
+   0084   6f            		MOV	L, A
+                        
+                        ; 070H - 07FH.
+                        
+   0085   70            		MOV	M, B
+   0086   71            		MOV	M, C
+   0087   72            		MOV	M, D
+   0088   73            		MOV	M, E
+   0089   74            		MOV	M, H
+   008a   75            		MOV	M, L
+   008b   76            		HLT
+   008c   77            		MOV	M, A
+   008d   78            		MOV	A, B
+   008e   79            		MOV	A, C
+   008f   7a            		MOV	A, D
+   0090   7b            		MOV	A, E
+   0091   7c            		MOV	A, H
+   0092   7d            		MOV	A, L
+   0093   7e            		MOV	A, M
+   0094   7f            		MOV	A, A
+                        
+                        ; 080H - 08FH.
+                        
+   0095   80            		ADD	B
+   0096   81            		ADD	C
+   0097   82            		ADD	D
+   0098   83            		ADD	E
+   0099   84            		ADD	H
+   009a   85            		ADD	L
+   009b   86            		ADD	M
+   009c   87            		ADD	A
+   009d   88            		ADC	B
+   009e   89            		ADC	C
+8085 Cross-Assembler Test Source File
+
+   009f   8a            		ADC	D
+   00a0   8b            		ADC	E
+   00a1   8c            		ADC	H
+   00a2   8d            		ADC	L
+   00a3   8e            		ADC	M
+   00a4   8f            		ADC	A
+                        
+                        ; 090H - 09FH.
+                        
+   00a5   90            		SUB	B
+   00a6   91            		SUB	C
+   00a7   92            		SUB	D
+   00a8   93            		SUB	E
+   00a9   94            		SUB	H
+   00aa   95            		SUB	L
+   00ab   96            		SUB	M
+   00ac   97            		SUB	A
+   00ad   98            		SBB	B
+   00ae   99            		SBB	C
+   00af   9a            		SBB	D
+   00b0   9b            		SBB	E
+   00b1   9c            		SBB	H
+   00b2   9d            		SBB	L
+   00b3   9e            		SBB	M
+   00b4   9f            		SBB	A
+                        
+                        ; 0A0H - 0AFH.
+                        
+   00b5   a0            		ANA	B
+   00b6   a1            		ANA	C
+   00b7   a2            		ANA	D
+   00b8   a3            		ANA	E
+   00b9   a4            		ANA	H
+   00ba   a5            		ANA	L
+   00bb   a6            		ANA	M
+   00bc   a7            		ANA	A
+   00bd   a8            		XRA	B
+   00be   a9            		XRA	C
+   00bf   aa            		XRA	D
+   00c0   ab            		XRA	E
+   00c1   ac            		XRA	H
+   00c2   ad            		XRA	L
+   00c3   ae            		XRA	M
+   00c4   af            		XRA	A
+                        
+                        ; 0B0H - 0BFH.
+                        
+   00c5   b0            		ORA	B
+   00c6   b1            		ORA	C
+   00c7   b2            		ORA	D
+   00c8   b3            		ORA	E
+   00c9   b4            		ORA	H
+   00ca   b5            		ORA	L
+   00cb   b6            		ORA	M
+   00cc   b7            		ORA	A
+   00cd   b8            		CMP	B
+   00ce   b9            		CMP	C
+   00cf   ba            		CMP	D
+8085 Cross-Assembler Test Source File
+
+   00d0   bb            		CMP	E
+   00d1   bc            		CMP	H
+   00d2   bd            		CMP	L
+   00d3   be            		CMP	M
+   00d4   bf            		CMP	A
+                        
+                        ; 0C0H - 0CFH.
+                        
+   00d5   c0            		RNZ
+   00d6   c1            		POP	B
+   00d7   c2 90 78      		JNZ	ADDRESS
+   00da   c3 90 78      		JMP	ADDRESS
+   00dd   c4 90 78      		CNZ	ADDRESS
+   00e0   c5            		PUSH	B
+   00e1   c6 12         		ADI	BYTE
+   00e3   c7            		RST	0
+   00e4   c8            		RZ
+   00e5   c9            		RET
+   00e6   ca 90 78      		JZ	ADDRESS
+                        					; 0CBH is undefined.
+   00e9   cc 90 78      		CZ	ADDRESS
+   00ec   cd 90 78      		CALL	ADDRESS
+   00ef   ce 12         		ACI	BYTE
+   00f1   cf            		RST	1
+                        
+                        ; 0D0H - 0DFH.
+                        
+   00f2   d0            		RNC
+   00f3   d1            		POP	D
+   00f4   d2 90 78      		JNC	ADDRESS
+   00f7   d3 56         		OUT	PORT
+   00f9   d4 90 78      		CNC	ADDRESS
+   00fc   d5            		PUSH	D
+   00fd   d6 12         		SUI	BYTE
+   00ff   d7            		RST	2
+   0100   d8            		RC
+                        					; 0D9H is undefined.
+   0101   da 90 78      		JC	ADDRESS
+   0104   db 56         		IN	PORT
+   0106   dc 90 78      		CC	ADDRESS
+                        					; 0DDH is undefined.
+   0109   de 12         		SBI	BYTE
+   010b   df            		RST	3
+                        
+                        ; 0E0H - 0EFH.
+                        
+   010c   e0            		RPO
+   010d   e1            		POP	H
+   010e   e2 90 78      		JPO	ADDRESS
+   0111   e3            		XTHL
+   0112   e4 90 78      		CPO	ADDRESS
+   0115   e5            		PUSH	H
+   0116   e6 12         		ANI	BYTE
+   0118   e7            		RST	4
+   0119   e8            		RPE
+   011a   e9            		PCHL
+   011b   ea 90 78      		JPE	ADDRESS
+   011e   eb            		XCHG
+8085 Cross-Assembler Test Source File
+
+   011f   ec 90 78      		CPE	ADDRESS
+                        					; 0EDH is undefined.
+   0122   ee 12         		XRI	BYTE
+   0124   ef            		RST	5
+                        
+                        ; 0F0H - 0FFH.
+                        
+   0125   f0            		RP
+   0126   f1            		POP	PSW
+   0127   f2 90 78      		JP	ADDRESS
+   012a   f3            		DI
+   012b   f4 90 78      		CP	ADDRESS
+   012e   f5            		PUSH	PSW
+   012f   f6 12         		ORI	BYTE
+   0131   f7            		RST	6
+   0132   f8            		RM
+   0133   f9            		SPHL
+   0134   fa 90 78      		JM	ADDRESS
+   0137   fb            		EI
+   0138   fc 90 78      		CM	ADDRESS
+                        					; 0FDH is undefined.
+   013b   fe 12         		CPI	BYTE
+   013d   ff            		RST	7
+                        
+                        ;
+                        ; Let's test the rest of the pseudo-ops while we're at it:
+                        ;
+   ffff                 VARIABLE	SET	-1
+                        
+   ffff                 		IF	VARIABLE
+   013e   ff 00 01      		DB	-1, , +1
+                        		ELSE
+                        		DB	+1, , -1
+                        		ENDIF
+                        
+   0000                 VARIABLE	SET	VARIABLE EQ 0
+                        
+   0000                 		IF	VARIABLE
+                        		DW	, +1
+   ffff                 		ELSE
+   0141   00 00 ff ff   		DW	, -1
+                        		ENDIF
+                        
+                        		PRINT "almost done with assembling"
+                        		PRINT BYTE  ;symbol and value printed
+                        
+                        ; testing constants
+                        
+   0145                 		DS	10H
+                        
+   0155   45 58 50 4c   		DB	"EXPLOSION", 0DH, 0AH, 0
+   0159   4f 53 49 4f   
+   015d   4e 0d 0a 00   
+                        
+   0161   ff ff ff ff   		DB	0ffH, 255, 255D, 377O, 377Q, 11111111B
+   0165   ff ff         
+   0167   a5 a5         		DW	0A5A5H
+U  0169   00 00         		DW	A5A5H		;error, looks like label
+8085 Cross-Assembler Test Source File
+
+                        
+                        
+                        ; Test IFDEF behavior
+   00aa                 FOO		equ	0AAH
+                        		
+   00aa                 		IFDEF	FOO
+   016b   aa            BAR:		DB	FOO
+U  016c   00 00         		DW	A5A5H		;error, looks like label
+                        		ELSE
+                        BAR:		DB	055H
+                        		DW	A5A5H		;error, looks like label
+                        		ENDIF
+                        
+                        		IFDEF	BAZ		;Not defined
+                        		OUT	00H
+                        		DW	A5A5H		;error, looks like label
+   ffff                 		ELSE
+   016e   d3 ff         		OUT	0FFH
+U  0170   00 00         		DW	A5A5H		;error, looks like label
+                        		ENDIF
+                        
+                        ; Test IFNDEF behavior
+   ffff                 		IFNDEF	BAZ		;Not defined
+   0172   3e 01         		MVI	A, 01H
+U  0174   00 00         		DW	A5A5H		;error, looks like label
+                        		ELSE
+                        		MVI	A, 80H
+                        		DW	A5A5H		;error, looks like label
+                        		ENDIF
+                        
+   0176   3e ff         QUX:		MVI	A, 0FFH
+                        		
+   0176                 		IFNDEF	QUX
+                        QUX:		equ	0044H
+                        		DW	A5A5H		;error, looks like label
+   ffff                 		ELSE
+   0178   21 76 01      		LXI	H, QUX
+U  017b   00 00         		DW	A5A5H		;error, looks like label
+                        		ENDIF
+                        
+                        
+   017d   a5 a5         		DW	0A5A5H
+U  017f   00 00         		DW	A5A5H		;error, looks like label
+                        
+                        
+7 Error(s)
+   0181                 		END
+8085 Cross-Assembler Test Source File
+
+7890  ADDRESS       016b  BAR           0012  BYTE          00aa  FOO       
+0056  PORT          0176  QUX           0000  VARIABLE      0034  WORD      
+

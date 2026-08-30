@@ -1,0 +1,35 @@
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	Sample program to make a sound on the MiniH8 speaker
+                        ;
+                        ;	GFR	8/29/2026
+                        ;
+                        
+                        ;	8255 PPI at 0F0-0F3
+                        
+   00f0                 PPI	EQU	0F0h
+   0000                 IOA	EQU	0
+   0003                 CTRL	EQU	3
+                        
+   0053                 DLY	EQU	53H		; delay program in ROM
+                        
+   2040                 	ORG	2040H
+                        ;
+                        ;	Assumes PPI control port is already set up by ROM Monitor
+                        ;
+   2040   db f0         BEEP:	IN	PPI+IOA		; Read Port A settings
+   2042   e6 3f         	ANI	00111111B	; Clear top two bits (PA6-7)
+   2044   f6 80         	ORI	10000000B	; PA7 on; PA6 off
+                        
+   2046   d3 f0         LOOP:	OUT	PPI+IOA		; send to speaker
+   2048   3e 01         	MVI	A,1		; wait a small amount
+   204a   cd 53 00      	CALL	DLY
+                        	
+   204d   db f0         	IN	PPI+IOA		; read it again
+   204f   ee c0         	XRI	11000000B	; alternate top 2 bits
+   2051   c3 46 20      	JMP	LOOP		; and loop
+                        	
+   2040                 	END	BEEP
+2040  BEEP          0003  CTRL          0053  DLY           0000  IOA       
+2046  LOOP          00f0  PPI           
+

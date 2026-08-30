@@ -1,0 +1,28 @@
+                        ;Flash a LED on SOD
+                        ;Top of RAM @ 0x4000
+                        
+   0000   21 00 40      START:  LXI H, 4000h
+   0003   f9                    SPHL
+                        
+   0004   3e c0         FLASH:  MVI A, 0C0h
+   0006   30                    SIM
+   0007   cd 13 00              CALL DELAY
+   000a   3e 40                 MVI A, 40h
+   000c   30                    SIM
+   000d   cd 13 00              CALL DELAY
+   0010   c3 04 00              JMP FLASH
+                        
+                        ;Delay, return to HL when done.
+   0013   3e ff         DELAY:  MVI A, 0FFh
+   0015   47                    MOV B, A
+   0016   3d            PT1:    DCR A
+   0017   05            PT2:    DCR B
+   0018   c2 17 00              JNZ PT2
+   001b   fe 00                 CPI 00h
+   001d   c2 16 00              JNZ PT1
+   0020   c9                    RET
+                        	
+   0000                 	END START
+0013  DELAY         0004  FLASH         0016  PT1           0017  PT2       
+0000  START         
+

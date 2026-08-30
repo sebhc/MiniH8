@@ -1,0 +1,101 @@
+                        ;	H8 Demo version for the Mini H8
+                        ;
+                        ;	recreated from demonstration program originally published
+                        ;	in the H8 Operations manual
+                        ;
+                        ;	G. Roberts	August 2026
+                        
+   200b                 FPLEDS	EQU	200BH		; LED refresh area
+   2008                 MFLAG	EQU	2008H
+   0053                 DLY	EQU	0053H		; relocated from PAM/8 location
+                        
+                        ;HORN	EQU	0		; TBD (not yet implemented)
+                        
+   2040                 	ORG	2040H
+                        ;
+                        ;	Classic "Your H8 is uP and running" code ...
+                        ;
+   2040   3e 02         DEMO	MVI	A,00000010B	; Disable LED updates
+   2042   32 08 20      	STA	MFLAG
+                        	
+   2045   06 04         START	MVI	B,4		; Four sets of patterns
+   2047   21 72 20      	LXI	H,LEDPAT	; LED patterns to display
+   204a   11 0b 20      DEMO0	LXI	D,FPLEDS	; LED pattern fields
+                        	
+   204d   0e 09         	MVI	C,9		; 9 LEDs
+   204f   7e            DEMO1	MOV	A,M		; Get an LED pattern
+   2050   12            	STAX	D		; store it in a field
+   2051   23            	INX	H		; next pattern
+   2052   13            	INX	D		; next field
+   2053   0d            	DCR	C		; count down
+   2054   c2 4f 20      	JNZ	DEMO1		; loop 'til done
+                        ;
+                        ;	Delay for about a second and a half
+                        ;
+   2057   0e 03         	MVI	C,3		; three times
+   2059   3e ff         DEMO2	MVI	A,255		; about 1/2 second
+   205b   cd 53 00      	CALL	DLY
+   205e   0d            	DCR	C
+   205f   c2 59 20      	JNZ	DEMO2
+                        
+   2062   05            	DCR	B		; next pattern
+   2063   c2 4a 20      	JNZ	DEMO0
+                        	
+   2066   3e 32         	MVI	A,50		; 100 ms beep
+                        ;	CALL	HORN
+                        
+   2068   3e 32         	MVI	A,50		; 100 ms delay
+   206a   cd 53 00      	CALL	DLY
+                        	
+   206d   3e 32         	MVI	A,50		; 100 ms beep
+                        ;	CALL	HORN
+                        	
+   206f   c3 45 20      	JMP	START		; Loop forever ...
+                        ;
+                        ; 	LED patterns to display (four sets of 9)
+                        ;
+   2072   00            LEDPAT	DB	00000000B	; <blank>
+   2073   4d            	DB	01001101B	; Y
+   2074   47            	DB	01000111B	; o
+   2075   45            	DB	01000101B	; u
+   2076   42            	DB	01000010B	; r
+   2077   00            	DB	00000000B	; <blank>
+   2078   6d            	DB	01101101B	; H
+   2079   7f            	DB	01111111B	; 8
+   207a   00            	DB	00000000B	; <blank>
+                        	
+   207b   60            	DB	01100000B	; i
+   207c   5b            	DB	01011011B	; s
+   207d   00            	DB	00000000B	; <blank>
+   207e   45            	DB	01000101B	; u
+   207f   67            	DB	01100111B	; p
+   2080   00            	DB	00000000B	; <blank>
+   2081   6f            	DB	01101111B	; a
+   2082   29            	DB	00101001B	; n
+   2083   3d            	DB	00111101B	; d
+                        	
+   2084   00            	DB	00000000B	; <blank>
+   2085   42            	DB	01000010B	; r
+   2086   45            	DB	01000101B	; u
+   2087   29            	DB	00101001B	; n
+   2088   29            	DB	00101001B	; n
+   2089   60            	DB	01100000B	; i
+   208a   29            	DB	00101001B	; n
+   208b   5f            	DB	01011111B	; g
+   208c   00            	DB	00000000B	; <blank>
+                        	
+   208d   61            	DB	01100001B
+   208e   01            	DB	00000001B
+   208f   0d            	DB	00001101B
+   2090   61            	DB	01100001B
+   2091   01            	DB	00000001B
+   2092   0d            	DB	00001101B
+   2093   61            	DB	01100001B
+   2094   01            	DB	00000001B
+   2095   0d            	DB	00001101B
+                        	
+   2040                 	END	DEMO
+2040  DEMO          204a  DEMO0         204f  DEMO1         2059  DEMO2     
+0053  DLY           200b  FPLEDS        2072  LEDPAT        2008  MFLAG     
+2045  START         
+

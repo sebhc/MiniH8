@@ -1,0 +1,8 @@
+ADDRESS     EQU   7890H
+BAR         EQU   016BH
+BYTE        EQU   0012H
+FOO         EQU   00AAH
+PORT        EQU   0056H
+QUX         EQU   0176H
+VARIABLE    EQU   0000H
+WORD        EQU   0034H

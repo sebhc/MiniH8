@@ -1,0 +1,53 @@
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	Sample program to flash "MON" LED on
+                        ;	Mini H8
+                        ;
+                        ;	32K of RAM
+                        ;	first 8K of memory is ROM
+                        ;
+                        ;	GFR	8/13/2026
+                        ;
+                        
+                        ;	8255 PPI at 0F0-0F3
+                        
+   00f0                 PPI	EQU	0F0h
+   0000                 IOA	EQU	0
+   0003                 CTRL	EQU	3
+                        
+   2040                 	ORG	2040h
+                        ;
+                        ;	set up 8255 PPI
+                        ;
+   2040   3e 88         START:	MVI	A,10001000b	; all bits OUT except PC4..PC7
+   2042   d3 f3         	OUT	PPI+CTRL
+                        ;
+                        ;	Loop turning MON (PA5) on and then off
+                        ;
+   2044   3e 20         FLASH:	MVI	A,00100000b	; PA5 ON
+   2046   d3 f0         	OUT	PPI+IOA
+                        	
+   2048   cd 55 20      	CALL	DELAY
+                        	
+                        
+   204b   3e 00         	MVI	A,0		; all OFF
+   204d   d3 f0         	OUT	PPI+IOA
+                        	
+   204f   cd 55 20      	CALL	DELAY
+   2052   c3 44 20      	JMP	FLASH
+                        ;
+                        ;	simple delay (double-nested counter loop)
+                        ;
+   2055   3e ff         DELAY:	MVI	A,0FFh
+   2057   47            	MOV	B,A
+   2058   3d            PT1:	DCR	A
+   2059   05            PT2:	DCR	B
+   205a   c2 59 20      	JNZ	PT2
+   205d   fe 00         	CPI	0
+   205f   c2 58 20      	JNZ	PT1
+   2062   c9            	RET
+                        	
+   2040                 	END	START
+0003  CTRL          2055  DELAY         2044  FLASH         0000  IOA       
+00f0  PPI           2058  PT1           2059  PT2           2040  START     
+

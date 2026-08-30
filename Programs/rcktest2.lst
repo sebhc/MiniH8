@@ -1,0 +1,204 @@
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	This program demonstrates a replacement for
+                        ;	the PAM-8 Read Console Keypad (RCK) routine.
+                        ;	This version is designed to work with the
+                        ;	Mini H8. The RCK routine will replace
+                        ;	the PAM-8 one in the new ROM.
+                        ;
+                        ;	This version loops continuously reading the
+                        ;	keypad and printing on the console the hex
+                        ;	value that is read.
+                        ;
+                        ;	GFR	8/29/2026
+                        ;
+                        
+                        ;	8255 PPI at 0F0-0F3
+                        
+   00f0                 PPI	EQU	0F0h
+   0000                 IOA	EQU	0
+   0001                 IOB	EQU	1
+   0002                 IOC	EQU	2
+   0003                 CTRL	EQU	3
+                        
+   0010                 KNUM	EQU	00010000b	; PC4
+   0020                 KMATH	EQU	00100000b	; PC5
+   0040                 KR	EQU	01000000b	; PC6
+   0080                 K0	EQU	10000000b	; PC7
+                        
+                        ;
+                        ;	Monitor entry points
+                        ;
+   0053                 DLY	EQU	0053H		; 2ms delay routine
+                        
+   04b3                 PRTHEX	EQU	04B3H		; print byte in A in hex
+   04c7                 PRTSPC	EQU	04C7H		; print a space
+   04d6                 PRTCLS	EQU	04D6H		; print CR/LF then string
+   04d9                 PRTSTR	EQU	04D9H		; print string
+                        
+   2040                 	ORG	2040h		; ORG at 040.100
+                        ;
+                        ;	Assumes PPI has been initialized by the ROM
+                        ;
+   2040                 START	EQU	*
+                        ;
+                        ;	Loop calling RCK and printing result
+                        ;
+   2040   cd 7e 20      LOOP:	CALL	RCK		; read console keypad (blocking read)
+                        ;
+                        ;	debounce
+                        ;
+   2043   47            	MOV	B,A		; save it
+   2044   3e 0a         	MVI	A,20/2		; 20ms wait to debounce
+   2046   cd 53 00      	CALL	DLY		; pause...
+   2049   78            	MOV	A,B		; now get it back
+                        	
+   204a   cd b3 04      	CALL	PRTHEX		; print the value
+   204d   cd c7 04      	CALL	PRTSPC		; and a separator
+   2050   cd 6c 20      	CALL	DELAY		; delay (debounce)
+   2053   cd 5e 20      	CALL	FLASH		; flash the MON LED
+                        	
+   2056   3e c8         	MVI	A,400/2		; 400ms delay
+   2058   cd 53 00      	CALL	DLY
+                        	
+   205b   c3 40 20      	JMP	LOOP		; and loop forever...
+                        
+                        ;
+                        ;	Flash the MON LED(PA5) on and then off
+                        ;
+   205e   db f0         FLASH:	IN	PPI+IOA		; read port A status byte
+   2060   f6 20         	ORI	00100000b	; PA5 ON
+   2062   d3 f0         	OUT	PPI+IOA
+   2064   cd 6c 20      	CALL	DELAY		; wait a bit
+   2067   e6 df         	ANI	11011111b	; PA5 OFF
+   2069   d3 f0         	OUT	PPI+IOA
+   206b   c9            	RET
+                        	
+                        ;
+                        ;	simple delay (double-nested counter loop)
+                        ;
+   206c   f5            DELAY:	PUSH	PSW
+   206d   c5            	PUSH	B
+                        	
+   206e   3e 10         	MVI	A,010h
+   2070   47            	MOV	B,A
+   2071   3d            PT1:	DCR	A
+   2072   05            PT2:	DCR	B
+   2073   c2 72 20      	JNZ	PT2
+   2076   fe 00         	CPI	0
+   2078   c2 71 20      	JNZ	PT1
+                        	
+   207b   c1            	POP	B
+   207c   f1            	POP	PSW
+   207d   c9            	RET
+                        ;
+                        ;       RCK - Read Console Keypad
+                        ;
+                        ;       RCK is called to read a keystroke from the console keypad.
+                        ;       Whenever a key is accepted.
+                        ;
+                        ;       bugs: add debouncing, auto-repeat, and a *bip* sound
+                        ;       when a value is accepted.
+                        ;
+                        ;       Entry:	None
+                        ;       Exit:	to caller when a key is hit:
+                        ;
+                        ;               (A) = 0 - '0'
+                        ;                     1 - '1'
+                        ;                     2 - '2'
+                        ;                     3 - '3'
+                        ;                     4 - '4'
+                        ;                     5 - '5'
+                        ;                     6 - '6'
+                        ;                     7 - '7'
+                        ;                     8 - '8'
+                        ;                     9 - '9'
+                        ;                    10 - '+'
+                        ;                    11 - '-'
+                        ;                    12 - '*'
+                        ;                    13 - '/'
+                        ;                    14 - '#'
+                        ;                    15 - '.'
+                        ;
+   207e   db f2         RCK:	IN	PPI+IOC		; read PC inputs on PPI
+   2080   47            	MOV	B,A		; save it
+   2081   e6 40         	ANI	KR		; check for '/' key
+   2083   3e 0d         	MVI	A,13		; prepare for yes
+   2085   c2 cd 20      	JNZ	RCKX		; "high" = key pressed
+                        	
+   2088   78            	MOV	A,B		; restore input value
+   2089   e6 80         	ANI	K0		; check for '0' key
+   208b   3e 00         	MVI	A,0		; prepare for yes
+   208d   c2 cd 20      	JNZ	RCKX		; "high" = key pressed
+                        ;
+                        ;	Now poll the "math" keys
+                        ;
+   2090   db f0         	IN	PPI+IOA		; read port A status byte
+   2092   e6 f0         	ANI	11110000b	; clear PA0..PA3 bits
+   2094   47            	MOV	B,A		; save it
+                        	
+   2095   0e 05         	MVI	C,5		; loop 5 times
+   2097   b1            RCK1:	ORA	C		; set PA bits
+   2098   d3 f0         	OUT	PPI+IOA		; select PA bits
+   209a   db f2         	IN	PPI+IOC		; read keys ("low" = key pressed)
+   209c   2f            	CMA			; now "high" = key pressed
+   209d   e6 20         	ANI	KMATH		; test bit
+   209f   c2 bc 20      	JNZ	RCKL		; found a key!
+   20a2   78            	MOV	A,B		; get back value
+   20a3   0d            	DCR	C		; count down
+   20a4   c2 97 20      	JNZ	RCK1		; and loop ...
+                        ;
+                        ;	Now poll the "numeric" keys (should be a subroutine!)
+                        ;
+   20a7   0e 09         	MVI	C,9		; 9 digits ('0' done already)
+   20a9   b1            RCK2:	ORA	C		; set PA bits
+   20aa   d3 f0         	OUT	PPI+IOA		; select PA bits
+   20ac   db f2         	IN	PPI+IOC		; read keys ("low" = key pressed)
+   20ae   2f            	CMA			; now "high" = key pressed
+   20af   e6 10         	ANI	KNUM		; test bit
+   20b1   c2 cc 20      	JNZ	RCKM		; found a key!
+   20b4   78            	MOV	A,B		; get back value
+   20b5   0d            	DCR	C		; count down
+   20b6   c2 a9 20      	JNZ	RCK2
+                        ;
+                        ;	Have now tested all cases. if execution falls through
+                        ;	there was no key pressed... keep scanning...
+                        ;
+   20b9   c3 7e 20      	JMP	RCK
+                        	
+                        ;
+                        ;	Come here if found "math" key match
+                        ;
+   20bc   0d            RCKL:	DCR	C		; make zero-based
+   20bd   06 00         	MVI	B,0		; (BC) = offset
+   20bf   21 c7 20      	LXI	H,RCKTBL	; (HL) = lookup table
+   20c2   09            	DAD	B		; look up value
+   20c3   7e            	MOV	A,M		; grab it
+   20c4   c3 cd 20      	JMP	RCKX		; and done!
+                        ;
+                        ;	Lookup for KMATH scan
+                        ;	
+   20c7   0f            RCKTBL:	DB	15		; 1 = '.'
+   20c8   0c            	DB	12		; 2 = '*'
+   20c9   0b            	DB	11		; 3 = '-'
+   20ca   0a            	DB	10		; 4 = '+'
+   20cb   0e            	DB	14		; 5 = '#'
+                        ;
+                        ;	Come here if found "num" key match
+                        ;
+   20cc   79            RCKM:	MOV	A,C		; simply return the iteration number
+                        ;
+                        ;	Come here with A containing the value that was read.
+                        ;
+   20cd   c9            RCKX:	RET
+                        
+                        	
+   2040                 	END	START
+0003  CTRL          206c  DELAY         0053  DLY           205e  FLASH     
+0000  IOA           0001  IOB           0002  IOC           0080  K0        
+0020  KMATH         0010  KNUM          0040  KR            2040  LOOP      
+00f0  PPI           04d6  PRTCLS        04b3  PRTHEX        04c7  PRTSPC    
+04d9  PRTSTR        2071  PT1           2072  PT2           207e  RCK       
+2097  RCK1          20a9  RCK2          20bc  RCKL          20cc  RCKM      
+20c7  RCKTBL        20cd  RCKX          2040  START         
+
