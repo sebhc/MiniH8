@@ -11,25 +11,40 @@
    0000                 IOA	EQU	0
    0003                 CTRL	EQU	3
                         
+   0040                 UO.NFR	EQU	01000000B	; NO REFRESH OF FRONT PANEL
+   2008                 MFLAG	EQU	2008H
+                        
+                        
    0053                 DLY	EQU	53H		; delay program in ROM
                         
    2040                 	ORG	2040H
                         ;
                         ;	Assumes PPI control port is already set up by ROM Monitor
                         ;
-   2040   db f0         BEEP:	IN	PPI+IOA		; Read Port A settings
-   2042   e6 3f         	ANI	00111111B	; Clear top two bits (PA6-7)
-   2044   f6 80         	ORI	10000000B	; PA7 on; PA6 off
-                        
-   2046   d3 f0         LOOP:	OUT	PPI+IOA		; send to speaker
-   2048   3e 01         	MVI	A,1		; wait a small amount
-   204a   cd 53 00      	CALL	DLY
+   2040                 BEEP	EQU	*
+                        ;
+                        ;	First disable FP LED refresh
+                        ;
+   2040   3a 08 20      	LDA	MFLAG		; get MFLAG byte
+   2043   f6 40         	ORI	UO.NFR		; set No Front Refresh bit
+   2045   32 08 20      	STA	MFLAG		; save it
                         	
-   204d   db f0         	IN	PPI+IOA		; read it again
-   204f   ee c0         	XRI	11000000B	; alternate top 2 bits
-   2051   c3 46 20      	JMP	LOOP		; and loop
+   2048   3e 0a         	MVI	A,20/2		; 20 ms delay
+   204a   cd 53 00      	CALL	DLY		; to let LEDs go out
+                        
+   204d   db f0         	IN	PPI+IOA		; Read Port A settings
+   204f   e6 3f         	ANI	00111111B	; Clear top two bits (PA6-7)
+   2051   f6 80         	ORI	10000000B	; PA7 on; PA6 off
+                        
+   2053   d3 f0         LOOP:	OUT	PPI+IOA		; send to speaker
+   2055   3e 01         	MVI	A,1		; wait a small amount
+   2057   cd 53 00      	CALL	DLY
+                        	
+   205a   db f0         	IN	PPI+IOA		; read it again
+   205c   ee c0         	XRI	11000000B	; alternate top 2 bits
+   205e   c3 53 20      	JMP	LOOP		; and loop
                         	
    2040                 	END	BEEP
 2040  BEEP          0003  CTRL          0053  DLY           0000  IOA       
-2046  LOOP          00f0  PPI           
+2053  LOOP          2008  MFLAG         00f0  PPI           0040  UO.NFR    
 

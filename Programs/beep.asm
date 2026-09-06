@@ -11,13 +11,28 @@ PPI	EQU	0F0h
 IOA	EQU	0
 CTRL	EQU	3
 
+UO.NFR	EQU	01000000B	; NO REFRESH OF FRONT PANEL
+MFLAG	EQU	2008H
+
+
 DLY	EQU	53H		; delay program in ROM
 
 	ORG	2040H
 ;
 ;	Assumes PPI control port is already set up by ROM Monitor
 ;
-BEEP:	IN	PPI+IOA		; Read Port A settings
+BEEP	EQU	*
+;
+;	First disable FP LED refresh
+;
+	LDA	MFLAG		; get MFLAG byte
+	ORI	UO.NFR		; set No Front Refresh bit
+	STA	MFLAG		; save it
+	
+	MVI	A,20/2		; 20 ms delay
+	CALL	DLY		; to let LEDs go out
+
+	IN	PPI+IOA		; Read Port A settings
 	ANI	00111111B	; Clear top two bits (PA6-7)
 	ORI	10000000B	; PA7 on; PA6 off
 
