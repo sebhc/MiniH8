@@ -17,7 +17,7 @@
                         ;
                         ;	Debounce and auto-repeat delays (ms)
                         ;
-   0014                 DBDLY	EQU	20
+   000a                 DBDLY	EQU	10
    0190                 ARDLY	EQU	400
                         
                         ;
@@ -29,76 +29,79 @@
    04c7                 PRTSPC	EQU	04C7H		; print a space
    04d6                 PRTCLS	EQU	04D6H		; print CR/LF then string
    04d9                 PRTSTR	EQU	04D9H		; print string
+   04cc                 CRLF	EQU	04CCH		; print CR/LF
    2034                 KEYVAL	EQU	2034H		; temp storage for key value
    2016                 RCKA	EQU	2016H		; key passing byte
                         
    2040                 	ORG	2040h		; ORG at 040.100
+                        	
+   2040   cd cc 04      START:	CALL	CRLF		; start on a new line
                         ;
                         ;	Assumes PPI has been initialized by the ROM
                         ;
                         ;
                         ;	Loop calling RCK and printing result
                         ;
-   2040   cd 4c 20      LOOP:	CALL	RCK		; read console keypad (blocking read)
+   2043   cd 4f 20      LOOP:	CALL	RCK		; read console keypad (blocking read)
                         
                         ;
                         ;	debounce
                         ;
-   2043   cd b3 04      	CALL	PRTHEX		; print the value
-   2046   cd c7 04      	CALL	PRTSPC		; and a separator
+   2046   cd b3 04      	CALL	PRTHEX		; print the value
+   2049   cd cc 04      	CALL	CRLF		; new line
                         	
-   2049   c3 40 20      	JMP	LOOP		; and loop forever...
+   204c   c3 43 20      	JMP	LOOP		; and loop forever...
                         
                         ;
                         ;       RCK - Read Console Keypad
                         ;
                         ;
-   204c   e5            RCK:	PUSH	H
-   204d   c5            	PUSH	B
+   204f   e5            RCK:	PUSH	H
+   2050   c5            	PUSH	B
                         	
-   204e   0e 14         	MVI	C,ARDLY/DBDLY
-   2050   21 16 20      	LXI	H,RCKA		; point to keypad byte
+   2051   0e 28         	MVI	C,ARDLY/DBDLY
+   2053   21 16 20      	LXI	H,RCKA		; point to keypad byte
                         ;
                         ;	First wait for some keyboard action
                         ;
-   2053   3a 34 20      RCK1:	LDA	KEYVAL		; get most recent key hit
-   2056   47            	MOV	B,A		; save it
-   2057   3e 0a         	MVI	A,DBDLY/2	; delay to debounce
-   2059   cd 53 00      	CALL	DLY
-   205c   78            	MOV	A,B		; get back candidate
+   2056   3a 34 20      RCK1:	LDA	KEYVAL		; get most recent key hit
+   2059   47            	MOV	B,A		; save it
+   205a   3e 05         	MVI	A,DBDLY/2	; delay to debounce
+   205c   cd 53 00      	CALL	DLY
+   205f   78            	MOV	A,B		; get back candidate
                         	
-   205d   be            	CMP	M		; compare to RCKA
-   205e   c2 65 20      	JNZ	RCK2		; have a change
-   2061   0d            	DCR	C		; wait N cycles (auto repeat)
-   2062   c2 53 20      	JNZ	RCK1		; changed, start over
+   2060   be            	CMP	M		; compare to RCKA
+   2061   c2 68 20      	JNZ	RCK2		; have a change
+   2064   0d            	DCR	C		; wait N cycles (auto repeat)
+   2065   c2 56 20      	JNZ	RCK1		; changed, start over
                         
-   2065   77            RCK2:	MOV	M,A
-   2066   b7            	ORA	A		; set flag bits
-   2067   fa 53 20      	JM	RCK1		; bit 7 set... no key pressed
+   2068   77            RCK2:	MOV	M,A
+   2069   b7            	ORA	A		; set flag bits
+   206a   fa 56 20      	JM	RCK1		; bit 7 set... no key pressed
                         ;
                         ;	have a key (make a sound here)
                         ;	
                         ;
                         ;	Make noise here...
                         ;
-   206a   e6 0f         	ANI	17Q		; make sure it's 4 bits
+   206d   e6 0f         	ANI	17Q		; make sure it's 4 bits
                         	
-   206c   c1            	POP	B
-   206d   e1            	POP	H
-   206e   c9            	RET
+   206f   c1            	POP	B
+   2070   e1            	POP	H
+   2071   c9            	RET
                         ;
                         ;	simple version (for testing. no debounce)
                         ;
-   206f   21 16 20      RK:	LXI	H,RCKA
-   2072   7e            RK1:	MOV	A,M		; fetch possible key value
-   2073   b7            	ORA	A		; set flags
-   2074   fa 72 20      	JM	RK1		; loop 'til not negative
-   2077   c9            	RET
+   2072   21 16 20      RK:	LXI	H,RCKA
+   2075   7e            RK1:	MOV	A,M		; fetch possible key value
+   2076   b7            	ORA	A		; set flags
+   2077   fa 75 20      	JM	RK1		; loop 'til not negative
+   207a   c9            	RET
                         
-   2040                 	END	LOOP
-0190  ARDLY         0014  DBDLY         0053  DLY           0000  IO.A      
-2034  KEYVAL        2040  LOOP          00f0  PPI           04d6  PRTCLS    
-04b3  PRTHEX        04c7  PRTSPC        04d9  PRTSTR        204c  RCK       
-2053  RCK1          2065  RCK2          2016  RCKA          206f  RK        
-2072  RK1           
+   2040                 	END	START
+0190  ARDLY         04cc  CRLF          000a  DBDLY         0053  DLY       
+0000  IO.A          2034  KEYVAL        2043  LOOP          00f0  PPI       
+04d6  PRTCLS        04b3  PRTHEX        04c7  PRTSPC        04d9  PRTSTR    
+204f  RCK           2056  RCK1          2068  RCK2          2016  RCKA      
+2072  RK            2075  RK1           2040  START         
 

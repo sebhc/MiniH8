@@ -431,13 +431,14 @@ CLOCK	LHLD	TICCNT
 	INX	H
 	SHLD	TICCNT		; INCREMENT TICCOUNT
 
-;	RFP - Refresh Front Panel
+;	RFP - Refresh Front Panel (and probe keypad switches)
 ;
 ;	This code uses the 8255 PIA lines to do two things:
 ;	1) refresh the front panel LEDs and 2) probe to detect
 ;	front panel keypad closures. This is called for every clock
 ;	interrupt so it updates only one 7-segment LED unit at a time (working
-;	right to left). The REFIND variable keeps track of the refresh index.
+;	right to left), and in general can check only one key closure per
+;	pass. The REFIND variable keeps track of the refresh index.
 ;
 ;	Since the H8 Mini makes dual purpose of the PA0..PA3 lines
 ;	to both select LEDS and switches, it makes sense to also use this
@@ -450,10 +451,14 @@ RFP	LXI	H,MFLAG		; ((HL)) = MFLAG
 	MOV	B,A		; save it in (B)
 	ANI	UO.NFR		; Test No Front Refresh bit
 	INX	H		; code assumes CTLFLG follows MFLAG
-
+;
+;	potential BUG: need to look at this more. since key pad
+;	detection is now intertwined with front panel refresh
+;	we really can't fully disable vi UO.NFR... - gfr
+;
 	MOV	A,M		; (A) = CTLFLG
 	MOV	C,D		; (C) = 0 in case no panel refresh
-	JNZ	CLK3		; NFR bit was set - no refresh
+;	JNZ	CLK3		; NFR bit was set - no refresh
 	INX	H		; code assumes REFIND follows CTLFLG
 ;
 ;	Here (HL) points to the refresh index (REFIND). Since the front
@@ -462,7 +467,14 @@ RFP	LXI	H,MFLAG		; ((HL)) = MFLAG
 ;
 	DCR	M		; decrement digit index
 	JNZ	CLK2		; still positive, keep going
-	MVI	M,9		; reset to 9 when it gets to zero
+;
+;	Starting new refresh cycle. Get ready for a new round
+;	of keypad scans: set PCKTMP to 0FFH
+;
+	MVI	A,0FFH		; default to return if no keys pressed
+	STA	PCKTMP		; after scanning all 9.
+	
+	MVI	M,9		; loop continuously counting down from 9
 CLK2	MOV	E,M		; (DE) = index pointer to pattern
 	DAD	D		; ((HL)) = (M) = LED pattern
 ;
@@ -485,11 +497,17 @@ CLK3	IN	PPI+IO.A	; read Port A status
 ;	PCK - Probe Console Keypad
 ;
 ;	While we have this line selected we can probe for switch closures by
-;	examining PC4..PC7. These input lines are cross-matrixed with the various
-;	key switches. If a key is pressed the appropriate value is stored in KEYVAL,
-;	per the table below. If no key is pressed KEYVAL is set to 255 (0FFH).
+;	examining PC4..PC7. These input lines are matrixed with the various
+;	key switches. If a key is pressed the appropriate value is stored in PCKTMP,
+;	per the table below. PCKTMP is initally set to "no key pressed" (0FFH) when
+;	the scan cycle begins.
 ;
-;	Key Values returned in KEYVAL:
+;	If no key is pressed on this pass we continue scanning with next clock interrupt.
+;	After 9 scans the value of PCKTMP is "published" to PCKVAL, where it can be
+;	read by the RCK routine. If no key was pressed during the 9 cycles then
+;	PCKVAL will be 0FFH.
+;
+;	Key Values to be returned in PCKVAL:
 ;
 ;	Key	  Value (decimal)
 ;	0-9		0-9
@@ -503,48 +521,39 @@ CLK3	IN	PPI+IO.A	; read Port A status
 ;
 PCK:	PUSH	B		; using B for scratch
 ;
-;	PC4..PC7 are four input lines on the PPI chip that are cross-matrixed
+;	PC4..PC7 are four input lines on the PPI chip that are matrixed
 ;	with the various switches.
 ;
+;	PC4	KNUM	Active "low"; Number [1..9]
+;	PC5	KMATH	Active "low"; '.', '*', '-', '+'
+;	PC6	KR	Active "high";'/' (RST)
+;	PC7	K0	Active "high", '0'
+;
 	IN	PPI+IO.C	; read PC4..PC7
-	MOV	B,A		; save it
-	ANI	KR		; check for '/' (13)
-	MVI	A,13		; prepare for yes
-	JNZ	PCK1		; "HIGH" = key pressed
+	XRI	00110000B	; make all signals "active high"
+	MOV	B,A		; keep a copy
+	ANI	KR		; check for '/'
+	JNZ	PCKR		; pressed, jump
 	
-	MOV	A,B		; get pattern back
-	ANI	K0		; check for '0' key (0)
-	MVI	A,0		; prepare for yes
-	JNZ	PCK1		; "HIGH" = key pressed
+	MOV	A,B		; restore reading
+	ANI	K0		; check for '0'
+	JNZ	PCKZ		; pressed, jump
 	
-	MOV	A,B		; get pattern back
-	CMA			; complement ("HIGH" means "key pressed")
-	MOV	B,A		; save complemented value
-	ANI	KNUM		; check for numeric (1..9)
-	MOV	A,E		; prepare for yes (simply pass value)
-	JNZ	PCK1		; key pressed
+	MOV	A,B		; restore reading
+	ANI	KNUM		; check for [1..9]
+	JNZ	PCKN
 	
-	MOV	A,B		; get pattern back
-	ANI	KMATH		; check for '.*-+#'
-	JNZ	PCK0		; yes, do KMATH logic
+	MOV	A,B		; restore reading
+	ANI	KMATH		; check for '.', '*', '-', '+'
+	JZ	PCKQ		; no match to any, skip to end
 ;
-;	Now we've tried 'em all and no hit on this pass
-;	On the final pass (E==1) we can declare no key
-;	found and set result to FF.
+;	A "math" key pressed ('#', '.', '*', '-' or '+')
 ;
-	DCR	E		; set 'Z' flag
-	JNZ	PCKX		; not done yet
-	MVI	A,0FFH		; flag as "no key hit"
-	JMP	PCK1		; store it and exit...
-	
-;
-;	KMATH has been asserted
-;
-;	First we need to test whether this came from the SM
+;	First we need to test whether this came from the SM ('#')
 ;	switch. To test that we need to momentarily turn off all refresh
 ;	lines (LED segments will briefly extinguish).
 ;
-PCK0:	IN	PPI+IO.A	; read Port A status
+PCKM:	IN	PPI+IO.A	; read Port A status
 	MOV	C,A		; save it (for restoration later)
 	ANI	11110000B	; clear refresh lines
 	OUT	PPI+IO.A	; turn off all lines
@@ -557,31 +566,59 @@ PCK0:	IN	PPI+IO.A	; read Port A status
 	OUT	PPI+IO.A	; select it
 	
 	MOV	A,B		; now let's see if KMATH was asserted
-	ANI	KMATH		; (remember "LOW" = key pressed)
-	JNZ	PCK2		; "HIGH" -> no key pressed (not SM)
-	MVI	A,14		; "LOW" -> SM key was pressed
+	ANI	KMATH		; (remember "low" = key pressed)
+	JNZ	PCKM1		; "high" -> no key pressed (not SM)
+	MVI	A,14		; "low" -> SM ('#') key was pressed
 	JMP	PCK1		; done!
-
-PCK2:	DCR	E		; make index zero-based
-	MVI	D,0		; (DE) = offset
-	LXI	H,PCKTBL	; (HL) = lookup table
-	DAD	D		; look up value
-	MOV	A,M		; grab it
-	JMP	PCK1		; and done!
 ;
-;	Lookup for KMATH scan
-;	
-PCKTBL:	DB	15		; 1 = '.'
-	DB	12		; 2 = '*'
-	DB	11		; 3 = '-'
-	DB	10		; 4 = '+'
+;	Set key value according to original PAM/8 scheme:
+; E = 1:	'.'	15
+; E = 2:	'*'	12
+; E = 3:	'-'	11
+; E = 4:	'+'	10
+;
+; for E = 2, 3 or 4 just subtract from 14. E = 1 is special case
+;
+PCKM1:	MVI	A,14
+	SUB	E		; A = 14 - (E)
+	CPI	13		; 13 should be 15
+	JC	PCK1		; <13 is OK
+	ADI	2		; make the adjustment
+	JMP	PCK1
 
+;
+;	RST ('/') pressed
+;
+PCKR:	MVI	A,13		; '/' = 13
+	JMP	PCK1		; done
+;
+;	'0' pressed
+;
+PCKZ:	XRA	A		; '0' = 0
+	JMP	PCK1		; done
+;
+;	'1' through '9' pressed
+;
+PCKN:	MOV	A,E		; return the scan number
+	JMP	PCK1		; done
 ;
 ;	Come here with (A) = keycode if key press was detected
 ;
-PCK1:	STA	KEYVAL		; save the key value
+PCK1:	STA	PCKTMP		; save the key value
 
-PCKX:	POP	B		; restore B, and done ...
+
+PCKQ:	POP	B		; restore B, and done ...
+	DCR	E		; set 'Z' flag
+	JNZ	PCKX		; not done yet
+;
+;	Done with 9 scans, move "temp" value to actual
+;
+	LDA	PCKTMP		; load our scratch copy
+	STA	PCKVAL		; make it official
+;
+;	End of keypad processing
+;
+PCKX	EQU	*
 ;
 ;	See if time to decode display values
 ;
@@ -2339,6 +2376,7 @@ UIVEC			; USER INTERRUPT VECTOR
 ;
 ;	new RAM locations for MiniPAM8
 ;
-KEYVAL	DS	1	; FP Key value from most recent scan (every tick)
+PCKVAL	DS	1	; PCK value from most recent scan (9 ticks)
+PCKTMP	DS	1	; temporary candidate keypad response from PCK
 
 	END

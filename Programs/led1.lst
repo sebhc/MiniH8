@@ -1,0 +1,59 @@
+                        ;
+                        ;	Classic LED1 demo, adapted for H8 Mini
+                        ;
+                        ;	Uses A85 Assembler
+                        ;
+                        ;	Glenn Roberts	8 September 2026
+                        ;
+                        
+   200b                 FPLEDS	EQU	200BH
+   2008                 MFLAG	EQU	2008H
+                        
+   0053                 DLY	EQU	0053H
+                        
+   00f0                 CTLPORT	EQU	360Q
+                        
+                        ;
+                        ;	Org at 40K but we will store in ROM at 2000H
+                        ;
+   a000                 	ORG	0A000H
+                        ;
+                        ; Here's the classic LED demo code ...
+                        ;
+   a000   3e 02         DEMO:	MVI	A,00000010B	; Disable LED updates
+   a002   32 08 20      	STA	MFLAG
+                        
+   a005   06 00         BEGIN:	MVI	B,0		; Initial pattern
+                        
+   a007   21 0b 20      MLOOP:	LXI	H,FPLEDS	; Point to LED refresh RAM
+   a00a   0e 09         	MVI	C,9		; 9 LEDs to refresh
+                        
+   a00c   78            	MOV	A,B		; Grab current pattern
+                        ;
+                        ;	copy the same pattern to all 9 LED positions
+                        ;
+   a00d   77            LLOOP:	MOV	M,A		; Store in LED position
+   a00e   23            	INX	H		; Point to next LED position
+   a00f   0d            	DCR	C		; Count down
+   a010   c2 0d a0      	JNZ	LLOOP
+                        ;
+                        ;	Delay a bit...
+                        ;
+   a013   0e 01         	MVI	C,1		; Call .DLY once
+   a015   3e 32         DLOOP:	MVI	A,50
+   a017   cd 53 00      	CALL	DLY		; delay...
+   a01a   0d            	DCR	C		; Count down
+   a01b   c2 15 a0      	JNZ	DLOOP
+                        
+   a01e   05            	DCR	B		; Change the pattern
+   a01f   c2 07 a0      	JNZ	MLOOP		; Loop through all patterns
+                        ;
+                        ;	Have cycled through all 255 patterns, now repeat
+                        ;
+   a022   c3 05 a0      	JMP	BEGIN		; Now start over!
+                        
+   a000                 	END	DEMO
+a005  BEGIN         00f0  CTLPORT       a000  DEMO          a015  DLOOP     
+0053  DLY           200b  FPLEDS        a00d  LLOOP         2008  MFLAG     
+a007  MLOOP         
+

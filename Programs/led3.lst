@@ -1,0 +1,71 @@
+                        ; Recreation of LED3 demo from early HUG
+                        ;
+                        ; Assembled with A85 for the H8 Mini
+                        ;
+                        ; G. Roberts September 2026
+                        ;
+                        
+   200b                 .ALEDS	EQU	200BH		; ABUSS LEDs
+   2008                 .MFLAG	EQU	2008H		; User Option Byte
+   0002                 UO.DDU	EQU	00000010B	; Disable Display Update
+   201b                 .TICCNT	EQU	201BH		; Clock Tick Counter
+                        
+   2040                 	ORG	2040H
+                        ;
+                        ; Here's the classic LED3 demo code ...
+                        ;
+   2040   0e 01         LED3:	MVI	C,1		; C stores pattern byte for LEDs
+   2042   21 1c 20      WAIT4:	LXI	H,.TICCNT+1	; High byte of tick counter
+                        ;
+                        ;	Watch the clock and wait for it to be a multiple of 4
+                        ;	(bit 3 of the high byte on). As long as it is set
+                        ;	just continue to loop here. During this time the 
+                        ;	LED patterns will not be updated.
+                        ;
+   2045   7e            LOOP:	MOV	A,M
+   2046   e6 04         	ANI	4
+   2048   fe 04         	CPI	4
+   204a   c2 45 20      	JNZ	LOOP
+                        ;
+                        ;	Now prepare to display the patterns. Disable normal
+                        ;	LED updates but leave LEDs lit
+                        ;
+   204d   21 08 20      	LXI	H,.MFLAG
+   2050   36 02         	MVI	M,UO.DDU	; Disable ROM LED updates
+                        ;
+                        ;	Memory pointer (HL) points to LED locations. Update
+                        ;	all 9 of them.
+                        ;
+   2052   21 0b 20      	LXI	H,.ALEDS
+   2055   06 09         	MVI	B,9
+   2057   0d            DISP:	DCR	C		; Move successive values of
+   2058   71            	MOV	M,C		; C into the LED patterns
+   2059   23            	INX	H
+   205a   05            	DCR	B
+   205b   c2 57 20      	JNZ	DISP
+                        ;
+                        ;	Watch the clock and wait for it to be a multiple of 2
+                        ;	(bit 2 of the high byte on). As long as it is set
+                        ;	just continue to loop here. During this time the 
+                        ;	LED patterns will not be updated.
+                        ;	
+   205e   21 1c 20      WAIT2:	LXI	H,.TICCNT+1	; High byte of tick counter
+   2061   7e            LOOP2:	MOV	A,M
+   2062   e6 02         	ANI	2
+   2064   fe 02         	CPI	2
+   2066   ca 61 20      	JZ	LOOP2
+                        ;
+                        ;	Note: when neither bits 2 nor 3 are set in the high byte
+                        ;	of the tick counter the program will cycle through this
+                        ;	outer loop, updating the 9 LEDs on each loop.  The user
+                        ;	will see a jumble of activity on the LEDs during this
+                        ;	time. The effect will be to freeze the LED display for
+                        ;	3 seconds and see the rapid updates for 1 second.
+                        ;
+   2069   c3 45 20      	JMP	LOOP
+                        	
+   2040                 	END	LED3
+200b  .ALEDS        2008  .MFLAG        201b  .TICCNT       2057  DISP      
+2040  LED3          2045  LOOP          2061  LOOP2         0002  UO.DDU    
+205e  WAIT2         2042  WAIT4         
+

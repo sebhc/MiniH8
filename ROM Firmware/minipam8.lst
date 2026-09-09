@@ -271,7 +271,7 @@
                         ;	Legacy relic from PAM/8 - needs updating for H8 Mini if used
                         ;
    001b   3e d0         GO.     MVI     A,CB.SSI+CB.CLI+CB.SPK ; OFF MONITOR MODE LIGHT
-   001d   c3 11 02              JMP     SST1            ; RETURN TO USER PROGRAM
+   001d   c3 1a 02              JMP     SST1            ; RETURN TO USER PROGRAM
                         
                         
                         ;	Interrupt 5.5 - caused by RTM/0 key combination
@@ -346,7 +346,7 @@
                         
    0053   f5            DLY	PUSH	PSW		; SAVE COUNT
    0054   af            	XRA	A		; DONT SOUND HORN
-   0055   c3 95 02      	JMP	HRN0		; PROCESS AS HORN
+   0055   c3 9e 02      	JMP	HRN0		; PROCESS AS HORN
                         ;
                         ;	Here we use a trick. This is the code to initialize the configuration
                         ;	of the 8255 PPI. There is a catch 22 here because this will momentarily
@@ -479,13 +479,14 @@
    00a0   23            	INX	H
    00a1   22 1b 20      	SHLD	TICCNT		; INCREMENT TICCOUNT
                         
-                        ;	RFP - Refresh Front Panel
+                        ;	RFP - Refresh Front Panel (and probe keypad switches)
                         ;
                         ;	This code uses the 8255 PIA lines to do two things:
                         ;	1) refresh the front panel LEDs and 2) probe to detect
                         ;	front panel keypad closures. This is called for every clock
                         ;	interrupt so it updates only one 7-segment LED unit at a time (working
-                        ;	right to left). The REFIND variable keeps track of the refresh index.
+                        ;	right to left), and in general can check only one key closure per
+                        ;	pass. The REFIND variable keeps track of the refresh index.
                         ;
                         ;	Since the H8 Mini makes dual purpose of the PA0..PA3 lines
                         ;	to both select LEDS and switches, it makes sense to also use this
@@ -498,46 +499,63 @@
    00a8   47            	MOV	B,A		; save it in (B)
    00a9   e6 40         	ANI	UO.NFR		; Test No Front Refresh bit
    00ab   23            	INX	H		; code assumes CTLFLG follows MFLAG
-                        
+                        ;
+                        ;	potential BUG: need to look at this more. since key pad
+                        ;	detection is now intertwined with front panel refresh
+                        ;	we really can't fully disable vi UO.NFR... - gfr
+                        ;
    00ac   7e            	MOV	A,M		; (A) = CTLFLG
    00ad   4a            	MOV	C,D		; (C) = 0 in case no panel refresh
-   00ae   c2 bd 00      	JNZ	CLK3		; NFR bit was set - no refresh
-   00b1   23            	INX	H		; code assumes REFIND follows CTLFLG
+                        ;	JNZ	CLK3		; NFR bit was set - no refresh
+   00ae   23            	INX	H		; code assumes REFIND follows CTLFLG
                         ;
                         ;	Here (HL) points to the refresh index (REFIND). Since the front
                         ;	panel LED pattern bytes (FPLEDS) immediately follow that location
                         ;	they are indexed from 1 to 9. REFIND was initialized to 1 at startup.
                         ;
-   00b2   35            	DCR	M		; decrement digit index
-   00b3   c2 b8 00      	JNZ	CLK2		; still positive, keep going
-   00b6   36 09         	MVI	M,9		; reset to 9 when it gets to zero
-   00b8   5e            CLK2	MOV	E,M		; (DE) = index pointer to pattern
-   00b9   19            	DAD	D		; ((HL)) = (M) = LED pattern
+   00af   35            	DCR	M		; decrement digit index
+   00b0   c2 ba 00      	JNZ	CLK2		; still positive, keep going
+                        ;
+                        ;	Starting new refresh cycle. Get ready for a new round
+                        ;	of keypad scans: set PCKTMP to 0FFH
+                        ;
+   00b3   3e ff         	MVI	A,0FFH		; default to return if no keys pressed
+   00b5   32 35 20      	STA	PCKTMP		; after scanning all 9.
+                        	
+   00b8   36 09         	MVI	M,9		; loop continuously counting down from 9
+   00ba   5e            CLK2	MOV	E,M		; (DE) = index pointer to pattern
+   00bb   19            	DAD	D		; ((HL)) = (M) = LED pattern
                         ;
                         ;	Port B controls which of the segments to light
                         ;	(M) = pattern to send to the LED
                         ;
-   00ba   af            	XRA	A		; first zero the pattern
-   00bb   d3 f1         	OUT	PPI+IO.B	; this avoids "ghosting"
+   00bc   af            	XRA	A		; first zero the pattern
+   00bd   d3 f1         	OUT	PPI+IO.B	; this avoids "ghosting"
                         	
-   00bd   db f0         CLK3	IN	PPI+IO.A	; read Port A status
-   00bf   e6 f0         	ANI	11110000B	; clear lower 4 bits
-   00c1   b3            	ORA	E		; set bits for digit to select
-   00c2   d3 f0         	OUT	PPI+IO.A	; select it
+   00bf   db f0         CLK3	IN	PPI+IO.A	; read Port A status
+   00c1   e6 f0         	ANI	11110000B	; clear lower 4 bits
+   00c3   b3            	ORA	E		; set bits for digit to select
+   00c4   d3 f0         	OUT	PPI+IO.A	; select it
                         ;
                         ;	Now set the segments to be lit on Port B
                         ;
-   00c4   7e            	MOV	A,M		; (A) = LED pattern from table
-   00c5   d3 f1         	OUT	PPI+IO.B	; set it!
+   00c6   7e            	MOV	A,M		; (A) = LED pattern from table
+   00c7   d3 f1         	OUT	PPI+IO.B	; set it!
                         ;
                         ;	PCK - Probe Console Keypad
                         ;
                         ;	While we have this line selected we can probe for switch closures by
-                        ;	examining PC4..PC7. These input lines are cross-matrixed with the various
-                        ;	key switches. If a key is pressed the appropriate value is stored in KEYVAL,
-                        ;	per the table below. If no key is pressed KEYVAL is set to 255 (0FFH).
+                        ;	examining PC4..PC7. These input lines are matrixed with the various
+                        ;	key switches. If a key is pressed the appropriate value is stored in PCKTMP,
+                        ;	per the table below. PCKTMP is initally set to "no key pressed" (0FFH) when
+                        ;	the scan cycle begins.
                         ;
-                        ;	Key Values returned in KEYVAL:
+                        ;	If no key is pressed on this pass we continue scanning with next clock interrupt.
+                        ;	After 9 scans the value of PCKTMP is "published" to PCKVAL, where it can be
+                        ;	read by the RCK routine. If no key was pressed during the 9 cycles then
+                        ;	PCKVAL will be 0FFH.
+                        ;
+                        ;	Key Values to be returned in PCKVAL:
                         ;
                         ;	Key	  Value (decimal)
                         ;	0-9		0-9
@@ -549,131 +567,150 @@
                         ;	'.'		15
                         ;     <no key>		255
                         ;
-   00c7   c5            PCK:	PUSH	B		; using B for scratch
+   00c9   c5            PCK:	PUSH	B		; using B for scratch
                         ;
-                        ;	PC4..PC7 are four input lines on the PPI chip that are cross-matrixed
+                        ;	PC4..PC7 are four input lines on the PPI chip that are matrixed
                         ;	with the various switches.
                         ;
-   00c8   db f2         	IN	PPI+IO.C	; read PC4..PC7
-   00ca   47            	MOV	B,A		; save it
-   00cb   e6 40         	ANI	KR		; check for '/' (13)
-   00cd   3e 0d         	MVI	A,13		; prepare for yes
-   00cf   c2 19 01      	JNZ	PCK1		; "HIGH" = key pressed
-                        	
-   00d2   78            	MOV	A,B		; get pattern back
-   00d3   e6 80         	ANI	K0		; check for '0' key (0)
-   00d5   3e 00         	MVI	A,0		; prepare for yes
-   00d7   c2 19 01      	JNZ	PCK1		; "HIGH" = key pressed
-                        	
-   00da   78            	MOV	A,B		; get pattern back
-   00db   2f            	CMA			; complement ("HIGH" means "key pressed")
-   00dc   47            	MOV	B,A		; save complemented value
-   00dd   e6 10         	ANI	KNUM		; check for numeric (1..9)
-   00df   7b            	MOV	A,E		; prepare for yes (simply pass value)
-   00e0   c2 19 01      	JNZ	PCK1		; key pressed
-                        	
-   00e3   78            	MOV	A,B		; get pattern back
-   00e4   e6 20         	ANI	KMATH		; check for '.*-+#'
-   00e6   c2 f2 00      	JNZ	PCK0		; yes, do KMATH logic
+                        ;	PC4	KNUM	Active "low"; Number [1..9]
+                        ;	PC5	KMATH	Active "low"; '.', '*', '-', '+'
+                        ;	PC6	KR	Active "high";'/' (RST)
+                        ;	PC7	K0	Active "high", '0'
                         ;
-                        ;	Now we've tried 'em all and no hit on this pass
-                        ;	On the final pass (E==1) we can declare no key
-                        ;	found and set result to FF.
-                        ;
-   00e9   1d            	DCR	E		; set 'Z' flag
-   00ea   c2 1c 01      	JNZ	PCKX		; not done yet
-   00ed   3e ff         	MVI	A,0FFH		; flag as "no key hit"
-   00ef   c3 19 01      	JMP	PCK1		; store it and exit...
+   00ca   db f2         	IN	PPI+IO.C	; read PC4..PC7
+   00cc   ee 30         	XRI	00110000B	; make all signals "active high"
+   00ce   47            	MOV	B,A		; keep a copy
+   00cf   e6 40         	ANI	KR		; check for '/'
+   00d1   c2 0b 01      	JNZ	PCKR		; pressed, jump
                         	
+   00d4   78            	MOV	A,B		; restore reading
+   00d5   e6 80         	ANI	K0		; check for '0'
+   00d7   c2 10 01      	JNZ	PCKZ		; pressed, jump
+                        	
+   00da   78            	MOV	A,B		; restore reading
+   00db   e6 10         	ANI	KNUM		; check for [1..9]
+   00dd   c2 14 01      	JNZ	PCKN
+                        	
+   00e0   78            	MOV	A,B		; restore reading
+   00e1   e6 20         	ANI	KMATH		; check for '.', '*', '-', '+'
+   00e3   ca 1b 01      	JZ	PCKQ		; no match to any, skip to end
                         ;
-                        ;	KMATH has been asserted
+                        ;	A "math" key pressed ('#', '.', '*', '-' or '+')
                         ;
-                        ;	First we need to test whether this came from the SM
+                        ;	First we need to test whether this came from the SM ('#')
                         ;	switch. To test that we need to momentarily turn off all refresh
                         ;	lines (LED segments will briefly extinguish).
                         ;
-   00f2   db f0         PCK0:	IN	PPI+IO.A	; read Port A status
-   00f4   4f            	MOV	C,A		; save it (for restoration later)
-   00f5   e6 f0         	ANI	11110000B	; clear refresh lines
-   00f7   d3 f0         	OUT	PPI+IO.A	; turn off all lines
-   00f9   db f2         	IN	PPI+IO.C	; re-read the inputs
-   00fb   47            	MOV	B,A		; save it
+   00e6   db f0         PCKM:	IN	PPI+IO.A	; read Port A status
+   00e8   4f            	MOV	C,A		; save it (for restoration later)
+   00e9   e6 f0         	ANI	11110000B	; clear refresh lines
+   00eb   d3 f0         	OUT	PPI+IO.A	; turn off all lines
+   00ed   db f2         	IN	PPI+IO.C	; re-read the inputs
+   00ef   47            	MOV	B,A		; save it
                         ;
                         ;	now immediately turn the LEDs back on (hopefully nobody noticed!)
                         ;	
-   00fc   79            	MOV	A,C		; get back desired line state
-   00fd   d3 f0         	OUT	PPI+IO.A	; select it
+   00f0   79            	MOV	A,C		; get back desired line state
+   00f1   d3 f0         	OUT	PPI+IO.A	; select it
                         	
-   00ff   78            	MOV	A,B		; now let's see if KMATH was asserted
-   0100   e6 20         	ANI	KMATH		; (remember "LOW" = key pressed)
-   0102   c2 0a 01      	JNZ	PCK2		; "HIGH" -> no key pressed (not SM)
-   0105   3e 0e         	MVI	A,14		; "LOW" -> SM key was pressed
-   0107   c3 19 01      	JMP	PCK1		; done!
-                        
-   010a   1d            PCK2:	DCR	E		; make index zero-based
-   010b   16 00         	MVI	D,0		; (DE) = offset
-   010d   21 15 01      	LXI	H,PCKTBL	; (HL) = lookup table
-   0110   19            	DAD	D		; look up value
-   0111   7e            	MOV	A,M		; grab it
-   0112   c3 19 01      	JMP	PCK1		; and done!
+   00f3   78            	MOV	A,B		; now let's see if KMATH was asserted
+   00f4   e6 20         	ANI	KMATH		; (remember "low" = key pressed)
+   00f6   c2 fe 00      	JNZ	PCKM1		; "high" -> no key pressed (not SM)
+   00f9   3e 0e         	MVI	A,14		; "low" -> SM ('#') key was pressed
+   00fb   c3 18 01      	JMP	PCK1		; done!
                         ;
-                        ;	Lookup for KMATH scan
-                        ;	
-   0115   0f            PCKTBL:	DB	15		; 1 = '.'
-   0116   0c            	DB	12		; 2 = '*'
-   0117   0b            	DB	11		; 3 = '-'
-   0118   0a            	DB	10		; 4 = '+'
+                        ;	Set key value according to original PAM/8 scheme:
+                        ; E = 1:	'.'	15
+                        ; E = 2:	'*'	12
+                        ; E = 3:	'-'	11
+                        ; E = 4:	'+'	10
+                        ;
+                        ; for E = 2, 3 or 4 just subtract from 14. E = 1 is special case
+                        ;
+   00fe   3e 0e         PCKM1:	MVI	A,14
+   0100   93            	SUB	E		; A = 14 - (E)
+   0101   fe 0d         	CPI	13		; 13 should be 15
+   0103   da 18 01      	JC	PCK1		; <13 is OK
+   0106   c6 02         	ADI	2		; make the adjustment
+   0108   c3 18 01      	JMP	PCK1
                         
+                        ;
+                        ;	RST ('/') pressed
+                        ;
+   010b   3e 0d         PCKR:	MVI	A,13		; '/' = 13
+   010d   c3 18 01      	JMP	PCK1		; done
+                        ;
+                        ;	'0' pressed
+                        ;
+   0110   af            PCKZ:	XRA	A		; '0' = 0
+   0111   c3 18 01      	JMP	PCK1		; done
+                        ;
+                        ;	'1' through '9' pressed
+                        ;
+   0114   7b            PCKN:	MOV	A,E		; return the scan number
+   0115   c3 18 01      	JMP	PCK1		; done
                         ;
                         ;	Come here with (A) = keycode if key press was detected
                         ;
-   0119   32 34 20      PCK1:	STA	KEYVAL		; save the key value
+   0118   32 35 20      PCK1:	STA	PCKTMP		; save the key value
                         
-   011c   c1            PCKX:	POP	B		; restore B, and done ...
+                        
+   011b   c1            PCKQ:	POP	B		; restore B, and done ...
+   011c   1d            	DCR	E		; set 'Z' flag
+   011d   c2 26 01      	JNZ	PCKX		; not done yet
+                        ;
+                        ;	Done with 9 scans, move "temp" value to actual
+                        ;
+   0120   3a 35 20      	LDA	PCKTMP		; load our scratch copy
+   0123   32 34 20      	STA	PCKVAL		; make it official
+                        ;
+                        ;	End of keypad processing
+                        ;
+   0126                 PCKX	EQU	*
                         ;
                         ;	See if time to decode display values
                         ;
-   011d   21 1b 20      	LXI	H,TICCNT	; check the clock
-   0120   7e            	MOV	A,M		; low byte only
-   0121   e6 1f         	ANI	31		; multiple of 32?
-   0123   c0            	RNZ			; return if not time
+   0126   21 1b 20      	LXI	H,TICCNT	; check the clock
+   0129   7e            	MOV	A,M		; low byte only
+   012a   e6 1f         	ANI	31		; multiple of 32?
+   012c   c0            	RNZ			; return if not time
                         ;
                         ;	every 32 interrupts update the front panel and
                         ;	check for key presses
                         ;
-   0124   cd 7b 03      	CALL UFD		; Update front panel display
+   012d   cd 84 03      	CALL UFD		; Update front panel display
                         
                         ;	For test purposes we are done now, return - gfr
                         
-   0127   c9            	RET
+   0130   c9            	RET
                         
                         ;	EXIT CLOCK INTERRUPT
                         
-   0128   01 09 20      	LXI	B,CTLFLG
-   012b   0a            	LDAX	B		; (A) = CTLFLG
-   012c   e6 20         	ANI	CB.MTL
-   012e   c2 96 00      	JNZ	INTXIT		; IF IN MONITOR CODE
-   0131   0b            	DCX	B
+   0131   01 09 20      	LXI	B,CTLFLG
+   0134   0a            	LDAX	B		; (A) = CTLFLG
+   0135   e6 20         	ANI	CB.MTL
+   0137   c2 96 00      	JNZ	INTXIT		; IF IN MONITOR CODE
+   013a   0b            	DCX	B
                         ;	ERRNZ	CTLFLG-MFLAG-1	; code assumes CTLFLG follows MFLAG
-   0132   0a            	LDAX	B		; (A) = MFLAG
+   013b   0a            	LDAX	B		; (A) = MFLAG
                         ;	ERRNZ	UO.HLT-200Q	; ASSUME HIGH-ORDER
-   0133   17            	RAL
-   0134   da 46 01      	JC	CLK4		; SKIP IT
+   013c   17            	RAL
+   013d   da 4f 01      	JC	CLK4		; SKIP IT
                         
                         ;	NOT IN MONITOR MODE, CHECK FOR HALT
                         
-   0137   3e 0a         	MVI	A,10		; (A) = INDEX OF *P* REG
-   0139   cd 34 03      	CALL	LRA.		; LOCATE REGISTER ADDRESS
-   013c   5e            	MOV	E,M
-   013d   23            	INX	H
-   013e   56            	MOV	D,M		; (D,E) = PC CONTENTS
-   013f   1b            	DCX	D
-   0140   1a            	LDAX	D
-   0141   fe 76         	CPI	MI.HLT		; CHECK FOR HALT
-   0143   ca 46 01      	JZ	ERROR		; IF HALT, BE IN MONITOR MODE
+   0140   3e 0a         	MVI	A,10		; (A) = INDEX OF *P* REG
+   0142   cd 3d 03      	CALL	LRA.		; LOCATE REGISTER ADDRESS
+   0145   5e            	MOV	E,M
+   0146   23            	INX	H
+   0147   56            	MOV	D,M		; (D,E) = PC CONTENTS
+   0148   1b            	DCX	D
+   0149   1a            	LDAX	D
+   014a   fe 76         	CPI	MI.HLT		; CHECK FOR HALT
+   014c   ca 4f 01      	JZ	ERROR		; IF HALT, BE IN MONITOR MODE
                         
                         ;	CHECK FOR 'RETURN TO MONITOR' KEY ENTRY.
-   0146                 CLK4	EQU	*
+   014f                 CLK4	EQU	*
                         ;	 IN	 IP.PAD
                         ;	 CPI	 56Q		 ; SEE IF '0' AND '#'
                         ;	 JNZ	 CUI1		 ; IF NOT, ALLOW USER PROCESSING OF CLOCK
@@ -690,78 +727,78 @@
                         ;		MFLAG CLEARED
                         ;	USES	ALL
                         
-   0146                 ERROR
-   0146   21 08 20      	LXI	H,MFLAG
-   0149   7e            	MOV	A,M		; (A) = MFLAG
-   014a   e6 bd         	ANI	377Q-UO.DDU-UO.NFR ; RE-ENABLE DISPLAYS
-   014c   77            	MOV	M,A		; REPLACE
-   014d   23            	INX	H		; next point to CTLFLG
-   014e   36 f0         	MVI	M,CB.SSI+CB.MTL+CB.CLI+CB.SPK ; RESTORE *CTLFLG*
+   014f                 ERROR
+   014f   21 08 20      	LXI	H,MFLAG
+   0152   7e            	MOV	A,M		; (A) = MFLAG
+   0153   e6 bd         	ANI	377Q-UO.DDU-UO.NFR ; RE-ENABLE DISPLAYS
+   0155   77            	MOV	M,A		; REPLACE
+   0156   23            	INX	H		; next point to CTLFLG
+   0157   36 f0         	MVI	M,CB.SSI+CB.MTL+CB.CLI+CB.SPK ; RESTORE *CTLFLG*
                         ;	ERRNZ	CTLFLG-MFLAG-1	; code assumes CTLFLG follows MFLAG
-   0150   fb            	EI
-   0151   2a 1d 20      	LHLD	REGPTR
-   0154   f9            	SPHL			; RESTORE STACK POINTER TO EMPTY STATE
-   0155   cd 90 02      	CALL	ALARM		; ALARM FOR 200 MS
+   0159   fb            	EI
+   015a   2a 1d 20      	LHLD	REGPTR
+   015d   f9            	SPHL			; RESTORE STACK POINTER TO EMPTY STATE
+   015e   cd 99 02      	CALL	ALARM		; ALARM FOR 200 MS
                         
                         ;	MTR - MONITOR LOOP.
                         ;
                         ;	THIS IS THE MAIN EXECUTIVE LOOP FOR THE FRONT PANEL EMULATOR.
                         
-   0158   fb            MTR	EI
+   0161   fb            MTR	EI
                         
-   0159   21 59 01      MTR1	LXI	H,MTR1
-   015c   e5            	PUSH	H		; SET 'MTR1' AS RETURN ADDRESS
-   015d   01 07 20      	LXI	B,DSPMOD	; (BC) = #DSPMOD
-   0160   0a            	LDAX	B
-   0161   e6 01         	ANI	1		; (A) = 1 IF ALTER
-   0163   2f            	CMA
-   0164   32 06 20      	STA	DSPROT		; ROTATE LED PERIODS IF ALTER
+   0162   21 62 01      MTR1	LXI	H,MTR1
+   0165   e5            	PUSH	H		; SET 'MTR1' AS RETURN ADDRESS
+   0166   01 07 20      	LXI	B,DSPMOD	; (BC) = #DSPMOD
+   0169   0a            	LDAX	B
+   016a   e6 01         	ANI	1		; (A) = 1 IF ALTER
+   016c   2f            	CMA
+   016d   32 06 20      	STA	DSPROT		; ROTATE LED PERIODS IF ALTER
                         
                         ;	READ KEY
                         
-   0167   cd 33 06      	CALL	RCK		; READ CONSOLE KEYPAD
-   016a   2a 14 20      	LHLD	ABUSS
-   016d   fe 0a         	CPI	10
-   016f   d2 79 01      	JNC	MTR4		; IF IN 'ALWAYS VALID' GROUP
-   0172   5f            	MOV	E,A		; SAVE VALUE
+   0170   cd 33 06      	CALL	RCK		; READ CONSOLE KEYPAD
+   0173   2a 14 20      	LHLD	ABUSS
+   0176   fe 0a         	CPI	10
+   0178   d2 82 01      	JNC	MTR4		; IF IN 'ALWAYS VALID' GROUP
+   017b   5f            	MOV	E,A		; SAVE VALUE
                         ;	SET	DSPMOD
-   0173   0a            	LDAX	B		; (A) = DSPMOD
-   0174   0f            	RRC
-   0175   da 9d 01      	JC	MTR5		; IF IN ALTER MODE
-   0178   7b            	MOV	A,E		; (A) = CODE
+   017c   0a            	LDAX	B		; (A) = DSPMOD
+   017d   0f            	RRC
+   017e   da a6 01      	JC	MTR5		; IF IN ALTER MODE
+   0181   7b            	MOV	A,E		; (A) = CODE
                         
                         ;	HAVE A COMMAND (NOT A VALUE)
                         
-   0179   d6 04         MTR4	SUI	4		; (A) = COMMAND
-   017b   da 46 01      	JC	ERROR		; IF BAD
-   017e   5f            	MOV	E,A
-   017f   e5            	PUSH	H		; SAVE ABUSS VALUE
-   0180   21 91 01      	LXI	H,MTRA
-   0183   16 00         	MVI	D,0
-   0185   19            	DAD	D		; (H,L) = ADDRESS OF TABLE ENTRY
-   0186   5e            	MOV	E,M
-   0187   19            	DAD	D		; (H,L) = ADDRESS OF PROCESSOR
-   0188   e3            	XTHL			; SET ADDRESS, (H,L) = (ABUSS)
-   0189   11 05 20      	LXI	D,REGI		; (D,E) = ADDRESS OF REG INDEX
+   0182   d6 04         MTR4	SUI	4		; (A) = COMMAND
+   0184   da 4f 01      	JC	ERROR		; IF BAD
+   0187   5f            	MOV	E,A
+   0188   e5            	PUSH	H		; SAVE ABUSS VALUE
+   0189   21 9a 01      	LXI	H,MTRA
+   018c   16 00         	MVI	D,0
+   018e   19            	DAD	D		; (H,L) = ADDRESS OF TABLE ENTRY
+   018f   5e            	MOV	E,M
+   0190   19            	DAD	D		; (H,L) = ADDRESS OF PROCESSOR
+   0191   e3            	XTHL			; SET ADDRESS, (H,L) = (ABUSS)
+   0192   11 05 20      	LXI	D,REGI		; (D,E) = ADDRESS OF REG INDEX
                         ;	SET	DSPMOD
-   018c   0a            	LDAX	B		; (A) = DSPMOD
-   018d   e6 02         	ANI	2		; SET 'Z' IF MEMORY
-   018f   0a            	LDAX	B		; (A) = DSPMOD
-   0190   c9            	RET			; JUMP TO PROCESSOR
+   0195   0a            	LDAX	B		; (A) = DSPMOD
+   0196   e6 02         	ANI	2		; SET 'Z' IF MEMORY
+   0198   0a            	LDAX	B		; (A) = DSPMOD
+   0199   c9            	RET			; JUMP TO PROCESSOR
                         
-   0191                 MTRA				; JUMP TABLE
-   0191   75            	DB	GO-$		; 4 - GO
-   0192   61            	DB	IN- $		; 5 - INPUT
-   0193   63            	DB	OUT-$		; 6 - OUTPUT
-   0194   75            	DB	SSTEP-$		; 7 - SINGLE STEP
-   0195   90            	DB	RMEM-$		; 8 - CASSETTE LOAD
-   0196   98            	DB	WMEM-$		; 9 - CASSETTE DUMP
-   0197   37            	DB	NEXT-$		; + - NEXT
-   0198   44            	DB	LAST-$		; - - LAST
-   0199   42            	DB	ABORT-$		; * - ABORT
-   019a   30            	DB	RW-$		; / - DISPLAY/ALTER
-   019b   4e            	DB	MEMM-$		; # - MEMORY MODE
-   019c   1c            	DB	REGM-$		; . - REGISTER MODE
+   019a                 MTRA				; JUMP TABLE
+   019a   75            	DB	GO-$		; 4 - GO
+   019b   61            	DB	IN- $		; 5 - INPUT
+   019c   63            	DB	OUT-$		; 6 - OUTPUT
+   019d   75            	DB	SSTEP-$		; 7 - SINGLE STEP
+   019e   90            	DB	RMEM-$		; 8 - CASSETTE LOAD
+   019f   98            	DB	WMEM-$		; 9 - CASSETTE DUMP
+   01a0   37            	DB	NEXT-$		; + - NEXT
+   01a1   44            	DB	LAST-$		; - - LAST
+   01a2   42            	DB	ABORT-$		; * - ABORT
+   01a3   30            	DB	RW-$		; / - DISPLAY/ALTER
+   01a4   4e            	DB	MEMM-$		; # - MEMORY MODE
+   01a5   1c            	DB	REGM-$		; . - REGISTER MODE
                         
                         ;	PROCESS MEMORY/REGISTER ALTERATIONS.
                         ;
@@ -770,12 +807,12 @@
                         ;	1) AM IN ALTER MODE, AND
                         ;	2) A KEY FROM 0-7 WAS ENTERED.
                         
-   019d   0f            MTR5	RRC
-   019e   7b            	MOV	A,E		; (A) = VALUE
-   019f   da ab 01      	JC	MTR6		; IS REGISTER
-   01a2   37            	STC			; INDICATE 1ST DIGIT IS IN (A)
-   01a3   cd 40 03      	CALL	IOB		; INPUT OCTAL BYTE
-   01a6   23            	INX	H		; DISPLAY NEXT LOCATION
+   01a6   0f            MTR5	RRC
+   01a7   7b            	MOV	A,E		; (A) = VALUE
+   01a8   da b4 01      	JC	MTR6		; IS REGISTER
+   01ab   37            	STC			; INDICATE 1ST DIGIT IS IN (A)
+   01ac   cd 49 03      	CALL	IOB		; INPUT OCTAL BYTE
+   01af   23            	INX	H		; DISPLAY NEXT LOCATION
                         
                         ;	SAE - STORE ABUSS AND EXIT.
                         ;
@@ -783,18 +820,18 @@
                         ;	EXIT	TO (RET)
                         ;	USES	NONE
                         
-   01a7   22 14 20      SAE	SHLD	ABUSS
-   01aa   c9            	RET
+   01b0   22 14 20      SAE	SHLD	ABUSS
+   01b3   c9            	RET
                         
                         ;	ALTER REGISTER
                         
-   01ab   f5            MTR6	PUSH	PSW		; SAVE CODE
-   01ac   cd 31 03      	CALL	LRA		; LOCATE REGISTER ADDRESS
-   01af   a7            	ANA	A
-   01b0   ca 46 01      	JZ	ERROR		; NOT ALLOWED TO ALTER STACKPOINTER
-   01b3   23            	INX	H
-   01b4   f1            	POP	PSW		; RESTORE VALUE AND CARRY FLAG
-   01b5   c3 3c 03      	JMP	IOA		; INPUT OCTAL ADDRESS
+   01b4   f5            MTR6	PUSH	PSW		; SAVE CODE
+   01b5   cd 3a 03      	CALL	LRA		; LOCATE REGISTER ADDRESS
+   01b8   a7            	ANA	A
+   01b9   ca 4f 01      	JZ	ERROR		; NOT ALLOWED TO ALTER STACKPOINTER
+   01bc   23            	INX	H
+   01bd   f1            	POP	PSW		; RESTORE VALUE AND CARRY FLAG
+   01be   c3 45 03      	JMP	IOA		; INPUT OCTAL ADDRESS
                         
                         
                         ;	REGM - ENTER REGISTER DISPLAY MODE.
@@ -802,21 +839,21 @@
                         ;	ENTRY	(A) = DSPMOD
                         ;		(BC) = #DSPMOD
                         
-   01b8   3e 02         REGM	MVI	A,00000010B	; Set dispolay to register mode
+   01c1   3e 02         REGM	MVI	A,00000010B	; Set dispolay to register mode
                         ;	SET	DSPMOD
-   01ba   02            	STAX	B		; SET DISPLAY REGISTER MODE
+   01c3   02            	STAX	B		; SET DISPLAY REGISTER MODE
                         ;	ERRNZ	DSPMOD-DSPROT-1	; code assumesDSPMOD follows DSPROT
-   01bb   0b            	DCX	B		; (BC) = #DSPROT
-   01bc   af            	XRA	A
-   01bd   02            	STAX	B		; SET ALL PERIODS ON
-   01be   cd 33 06      	CALL	RCK		; READ KEY ENTRY
-   01c1   3d            	DCR	A		; DISPLACE
-   01c2   fe 06         	CPI	6
-   01c4   d2 46 01      	JNC	ERROR		; NOT 1-6
-   01c7   07            	RLC
-   01c8   12            	STAX	D		; SET NEW REG IND
+   01c4   0b            	DCX	B		; (BC) = #DSPROT
+   01c5   af            	XRA	A
+   01c6   02            	STAX	B		; SET ALL PERIODS ON
+   01c7   cd 33 06      	CALL	RCK		; READ KEY ENTRY
+   01ca   3d            	DCR	A		; DISPLACE
+   01cb   fe 06         	CPI	6
+   01cd   d2 4f 01      	JNC	ERROR		; NOT 1-6
+   01d0   07            	RLC
+   01d1   12            	STAX	D		; SET NEW REG IND
                         ;	SET	REGI
-   01c9   c9            	RET
+   01d2   c9            	RET
                         
                         ;	RW - TOGGLE DISPLAY/ALTER MODE.
                         ;
@@ -824,29 +861,29 @@
                         ;		(BC) = ADDRESS OF DSPMOD
                         
                         ;	SET	DSPMOD
-   01ca   ee 01         RW	XRI	1
-   01cc   02            	STAX	B
-   01cd   c9            	RET
+   01d3   ee 01         RW	XRI	1
+   01d5   02            	STAX	B
+   01d6   c9            	RET
                         
                         ;	NEXT - INCREMENT DISPLAY ELEMENT
                         ;
                         ;	ENTRY	(HL) = (ABUSS)
                         ;		(DE) = ADDRESS OF REGIND
                         
-   01ce   23            NEXT	INX	H
-   01cf   ca a7 01      	JZ	SAE		; IF MEMORY, STORE VALUES AND EXIT
+   01d7   23            NEXT	INX	H
+   01d8   ca b0 01      	JZ	SAE		; IF MEMORY, STORE VALUES AND EXIT
                         
                         ;	IS REGISTER MODE.
                         
                         ;	SET	REGI
-   01d2   1a            	LDAX	D		; (A) = REGI
-   01d3   c6 02         	ADI	2		; INCREMENT REGISTER INDEX
-   01d5   12            	STAX	D		; WRAP TO *SP*
-   01d6   fe 0c         	CPI	12
-   01d8   d8            	RC			; IF NOT TOO LARGE, EXIT
-   01d9   af            	XRA	A		; OVERFLOW
-   01da   12            	STAX	D
-   01db   c9            ABORT	RET
+   01db   1a            	LDAX	D		; (A) = REGI
+   01dc   c6 02         	ADI	2		; INCREMENT REGISTER INDEX
+   01de   12            	STAX	D		; WRAP TO *SP*
+   01df   fe 0c         	CPI	12
+   01e1   d8            	RC			; IF NOT TOO LARGE, EXIT
+   01e2   af            	XRA	A		; OVERFLOW
+   01e3   12            	STAX	D
+   01e4   c9            ABORT	RET
                         
                         ;	LAST - INCREMENT DISPLAY ELEMENT
                         ;
@@ -854,32 +891,32 @@
                         ;		(DE) = ADDRESS OF REGIND
                         ;
                         
-   01dc   2b            LAST	DCX	H
-   01dd   ca a7 01      	JZ	SAE		; IF MEMORY, STORE AND EXIT
+   01e5   2b            LAST	DCX	H
+   01e6   ca b0 01      	JZ	SAE		; IF MEMORY, STORE AND EXIT
                         
                         ;	IS REGISTER MODE
                         
                         ;	SET	REGI
-   01e0   1a            LST2	LDAX	D		; (A) = REGI
-   01e1   d6 02         	SUI	2
-   01e3   12            	STAX	D
-   01e4   d0            	RNC			; IF OK
-   01e5   3e 0a         	MVI	A,10		; UNDERFLOW TO *PC*
-   01e7   12            	STAX	D
-   01e8   c9            	RET
+   01e9   1a            LST2	LDAX	D		; (A) = REGI
+   01ea   d6 02         	SUI	2
+   01ec   12            	STAX	D
+   01ed   d0            	RNC			; IF OK
+   01ee   3e 0a         	MVI	A,10		; UNDERFLOW TO *PC*
+   01f0   12            	STAX	D
+   01f1   c9            	RET
                         
                         ;	MEMM - ENTER DISPLAY MEMORY MODE
                         ;
                         ;	ENTRY	(BC) = ADDRESS OF DSPMOD
                         
-   01e9   af            MEMM	XRA	A		; (A) = 0
+   01f2   af            MEMM	XRA	A		; (A) = 0
                         ;	SET	DSPMOD
-   01ea   02            	STAX	B		; SET DISPLAY MEMORY MODE
+   01f3   02            	STAX	B		; SET DISPLAY MEMORY MODE
                         ;	ERRNZ	DSPMOD-DSPROT-1	; code assumes DSPMOD follows DSPROT
-   01eb   0b            	DCX	B		; (BC) = #DSPROT
-   01ec   02            	STAX	B		; SET ALL PERIODS ON
-   01ed   21 15 20      	LXI	H,ABUSS+1
-   01f0   c3 3c 03      	JMP	IOA		; INPUT OCTAL ADDRESS
+   01f4   0b            	DCX	B		; (BC) = #DSPROT
+   01f5   02            	STAX	B		; SET ALL PERIODS ON
+   01f6   21 15 20      	LXI	H,ABUSS+1
+   01f9   c3 45 03      	JMP	IOA		; INPUT OCTAL ADDRESS
                         
                         ;	IN - Input a data byte
                         ;
@@ -892,54 +929,54 @@
                         ;	EXIT:	ABUSS updated
                         ;		(A) = value (for IN)
                         ;
-   01f3   06 db         IN	MVI	B,MI.IN		; Store the IN instruction in RAM
-   01f5   11            	DB	MI.LXID		; clever trick (skip over 'OUT' if doing 'IN')
-   01f6   06 d3         OUT	MVI	B,MI.OUT	; store the OUT instruction in RAM
-   01f8   7c            	MOV	A,H		; (A) = value
-   01f9   65            	MOV	H,L		; (H) = port
-   01fa   68            	MOV	L,B		; (L) = IN/OUT instruction
-   01fb   22 02 20      	SHLD	IOWRK		; Store instruction and port
-   01fe   cd 02 20      	CALL	IOWRK		; do the actual I/O call
-   0201   6c            	MOV	L,H		; (L) = port
-   0202   67            	MOV	H,A		; (H) = value
-   0203   c3 a7 01      	JMP	SAE		; store ABUSS and exit
+   01fc   06 db         IN	MVI	B,MI.IN		; Store the IN instruction in RAM
+   01fe   11            	DB	MI.LXID		; clever trick (skip over 'OUT' if doing 'IN')
+   01ff   06 d3         OUT	MVI	B,MI.OUT	; store the OUT instruction in RAM
+   0201   7c            	MOV	A,H		; (A) = value
+   0202   65            	MOV	H,L		; (H) = port
+   0203   68            	MOV	L,B		; (L) = IN/OUT instruction
+   0204   22 02 20      	SHLD	IOWRK		; Store instruction and port
+   0207   cd 02 20      	CALL	IOWRK		; do the actual I/O call
+   020a   6c            	MOV	L,H		; (L) = port
+   020b   67            	MOV	H,A		; (H) = value
+   020c   c3 b0 01      	JMP	SAE		; store ABUSS and exit
                         
                         ;	GO - RETURN TO USER MODE
                         ;
                         ;	ENTRY	NONE
                         
-   0206   c3 1b 00      GO	JMP	GO.		; ROUTINE IS IN WASTE SPACE
+   020f   c3 1b 00      GO	JMP	GO.		; ROUTINE IS IN WASTE SPACE
                         
                         ;	SSTEP - SINGLE STEP INSTRUCTION
                         ;
                         ;	ENTRY	NONE
                         
-   0209                 SSTEP				; SINGLE STEP
-   0209   f3            	DI			; DISABLE INTERRUPTS UNTIL THE RIGHT TIME
-   020a   3a 09 20      	LDA	CTLFLG
-   020d   ee 10         	XRI	CB.SSI		; CLEAR SINGLE STEP INHIBIT
-   020f   d3 f0         	OUT	OP.CTL		; PRIME SINGLE STEP INTERRUPT
-   0211   32 09 20      SST1	STA	CTLFLG		; SET NEW FLAG VALUES
-   0214   e1            	POP	H		; CLEAN STACK
-   0215   c3 96 00      	JMP	INTXIT		; RETURN TO USER ROUTINE FOR STEP
+   0212                 SSTEP				; SINGLE STEP
+   0212   f3            	DI			; DISABLE INTERRUPTS UNTIL THE RIGHT TIME
+   0213   3a 09 20      	LDA	CTLFLG
+   0216   ee 10         	XRI	CB.SSI		; CLEAR SINGLE STEP INHIBIT
+   0218   d3 f0         	OUT	OP.CTL		; PRIME SINGLE STEP INTERRUPT
+   021a   32 09 20      SST1	STA	CTLFLG		; SET NEW FLAG VALUES
+   021d   e1            	POP	H		; CLEAN STACK
+   021e   c3 96 00      	JMP	INTXIT		; RETURN TO USER ROUTINE FOR STEP
                         
                         ;	STPRTN - SINGLE STEP RETURN
                         
-   0218                 STPRTN
-   0218   f6 10         	ORI	CB.SSI		; DISABLE SINGLE STEP INTERRUPTION
-   021a   d3 f0         	OUT	OP.CTL		; TURN OFF SINGLE STEP ENABLE
+   0221                 STPRTN
+   0221   f6 10         	ORI	CB.SSI		; DISABLE SINGLE STEP INTERRUPTION
+   0223   d3 f0         	OUT	OP.CTL		; TURN OFF SINGLE STEP ENABLE
                         ;	SET	CTLFLG
-   021c   12            	STAX	D
-   021d   e6 20         	ANI	CB.MTL		; SEE IF IN MONITOR MODE
-   021f   c2 58 01      	JNZ	MTR
-   0222   c3 22 20      	JMP	UIVEC+3		; TRANSFER TO USER'S ROUTINE
+   0225   12            	STAX	D
+   0226   e6 20         	ANI	CB.MTL		; SEE IF IN MONITOR MODE
+   0228   c2 61 01      	JNZ	MTR
+   022b   c3 22 20      	JMP	UIVEC+3		; TRANSFER TO USER'S ROUTINE
                         
                         ;	RMEM - LOAD MEMORY FROM TAPE
                         ;
                         
-   0225   21 d6 02      RMEM	LXI	H,TPABT
-   0228   22 19 20      	SHLD	TPERRX		; SETUP ERROR EXIT ADDRESS
-   022b   c3 a3 06      	JMP	LOAD
+   022e   21 df 02      RMEM	LXI	H,TPABT
+   0231   22 19 20      	SHLD	TPERRX		; SETUP ERROR EXIT ADDRESS
+   0234   c3 a3 06      	JMP	LOAD
                         
                         
                         ;	DUMP - DUMP MEMORY TO MAG TAPE.
@@ -951,60 +988,60 @@
                         ;		USER PC = ENTRY POINT ADDRESS
                         ;	EXIT	TO CALLER.
                         
-   022e   21 d6 02      WMEM	LXI	H,TPABT
-   0231   22 19 20      	SHLD	TPERRX		; TAPE ERROR EXIT
+   0237   21 df 02      WMEM	LXI	H,TPABT
+   023a   22 19 20      	SHLD	TPERRX		; TAPE ERROR EXIT
                         
-   0234   3e 01         DUMP	MVI	A,UCI.TE
-   0236   d3 f9         	OUT	OP.TPC		; SETUP TAPE CONTROL
-   0238   3e 16         	MVI	A,A.SYN
-   023a   26 20         	MVI	H,32		; (H) = # OF SYNC CHARACTERS
-   023c   cd 1e 03      WME1	CALL	WNB
-   023f   25            	DCR	H
-   0240   c2 3c 02      	JNZ	WME1		; WRITE SYN HEADER
-   0243   3e 02         	MVI	A,A.STX
-   0245   cd 1e 03      	CALL	WNB		; WRITE STX
-   0248   6c            	MOV	L,H		; (HL) = 00
-   0249   22 17 20      	SHLD	CRCSUM		; CLEAR CRC 16
-   024c   21 01 81      	LXI	H,100401Q	; RT.MI+80H*256+1 FIRST AND LAST MI RECORD
-   024f   cd 19 03      	CALL	WNP
-   0252   2a 00 20      	LHLD	START
-   0255   eb            	XCHG			; (D,E) = START ADDRESS
-   0256   2a 14 20      	LHLD	ABUSS		; (H,L) = STOP ADDR
-   0259   23            	INX	H		; COMPUTE WITH STOP+1
-   025a   7d            	MOV	A,L
-   025b   93            	SUB	E
-   025c   6f            	MOV	L,A
-   025d   7c            	MOV	A,H
-   025e   9a            	SBB	D
-   025f   67            	MOV	H,A		; (HL) = COUNT
-   0260   cd 19 03      	CALL	WNP		; WRITE COUNT
-   0263   e5            	PUSH	H
-   0264   3e 0a         	MVI	A,10
-   0266   d5            	PUSH	D		; SAVE (DE)
-   0267   cd 34 03      	CALL	LRA.		; LOCATE P-REG ADDRESS
-   026a   7e            	MOV	A,M
-   026b   23            	INX	H
-   026c   66            	MOV	H,M
-   026d   6f            	MOV	L,A		; (HL) = CONTENTS OF PC
-   026e   cd 19 03      	CALL	WNP		; WRITE HEADER
-   0271   e1            	POP	H		; (HL) = ADDRESS
-   0272   d1            	POP	D		; (DE) = COUNT
-   0273   cd 19 03      	CALL	WNP
+   023d   3e 01         DUMP	MVI	A,UCI.TE
+   023f   d3 f9         	OUT	OP.TPC		; SETUP TAPE CONTROL
+   0241   3e 16         	MVI	A,A.SYN
+   0243   26 20         	MVI	H,32		; (H) = # OF SYNC CHARACTERS
+   0245   cd 27 03      WME1	CALL	WNB
+   0248   25            	DCR	H
+   0249   c2 45 02      	JNZ	WME1		; WRITE SYN HEADER
+   024c   3e 02         	MVI	A,A.STX
+   024e   cd 27 03      	CALL	WNB		; WRITE STX
+   0251   6c            	MOV	L,H		; (HL) = 00
+   0252   22 17 20      	SHLD	CRCSUM		; CLEAR CRC 16
+   0255   21 01 81      	LXI	H,100401Q	; RT.MI+80H*256+1 FIRST AND LAST MI RECORD
+   0258   cd 22 03      	CALL	WNP
+   025b   2a 00 20      	LHLD	START
+   025e   eb            	XCHG			; (D,E) = START ADDRESS
+   025f   2a 14 20      	LHLD	ABUSS		; (H,L) = STOP ADDR
+   0262   23            	INX	H		; COMPUTE WITH STOP+1
+   0263   7d            	MOV	A,L
+   0264   93            	SUB	E
+   0265   6f            	MOV	L,A
+   0266   7c            	MOV	A,H
+   0267   9a            	SBB	D
+   0268   67            	MOV	H,A		; (HL) = COUNT
+   0269   cd 22 03      	CALL	WNP		; WRITE COUNT
+   026c   e5            	PUSH	H
+   026d   3e 0a         	MVI	A,10
+   026f   d5            	PUSH	D		; SAVE (DE)
+   0270   cd 3d 03      	CALL	LRA.		; LOCATE P-REG ADDRESS
+   0273   7e            	MOV	A,M
+   0274   23            	INX	H
+   0275   66            	MOV	H,M
+   0276   6f            	MOV	L,A		; (HL) = CONTENTS OF PC
+   0277   cd 22 03      	CALL	WNP		; WRITE HEADER
+   027a   e1            	POP	H		; (HL) = ADDRESS
+   027b   d1            	POP	D		; (DE) = COUNT
+   027c   cd 22 03      	CALL	WNP
                         
-   0276   7e            WME2	MOV	A,M
-   0277   cd 1e 03      	CALL	WNB		; WRITE BYTE
-   027a   22 14 20      	SHLD	ABUSS		; SET ADDRESS FOR DISPLAY
-   027d   23            	INX	H
-   027e   1b            	DCX	D
-   027f   7a            	MOV	A,D
-   0280   b3            	ORA	E
-   0281   c2 76 02      	JNZ	WME2		; IF MORE TO GO
+   027f   7e            WME2	MOV	A,M
+   0280   cd 27 03      	CALL	WNB		; WRITE BYTE
+   0283   22 14 20      	SHLD	ABUSS		; SET ADDRESS FOR DISPLAY
+   0286   23            	INX	H
+   0287   1b            	DCX	D
+   0288   7a            	MOV	A,D
+   0289   b3            	ORA	E
+   028a   c2 7f 02      	JNZ	WME2		; IF MORE TO GO
                         
                         ;	WRITE CHECKSUM
                         
-   0284   2a 17 20      	LHLD	CRCSUM
-   0287   cd 19 03      	CALL	WNP		; WRITE IT
-   028a   cd 19 03      	CALL	WNP		; FLUSH CHECKSUM
+   028d   2a 17 20      	LHLD	CRCSUM
+   0290   cd 22 03      	CALL	WNP		; WRITE IT
+   0293   cd 22 03      	CALL	WNP		; FLUSH CHECKSUM
                         ;	JMP	TFT
                         
                         ;	TFT - TURN OFF TAPE.
@@ -1012,8 +1049,8 @@
                         ;	STOP THE TAPE TRANSPORT.
                         ;
                         
-   028d   af            TFT	XRA	A
-   028e   d3 f9         	OUT	OP.TPC		; TURN OFF TAPE
+   0296   af            TFT	XRA	A
+   0297   d3 f9         	OUT	OP.TPC		; TURN OFF TAPE
                         
                         ;	HORN - MAKE NOISE.
                         ;
@@ -1021,28 +1058,28 @@
                         ;	EXIT	NONE
                         ;	USES	A,F
                         
-   0290   3e 64         ALARM	MVI	A,200/2		; 200 MS BEEP
-   0292   f5            HORN	PUSH	PSW
-   0293   3e 80         	MVI	A,CB.SPK	; TURN ON SPEAKER
+   0299   3e 64         ALARM	MVI	A,200/2		; 200 MS BEEP
+   029b   f5            HORN	PUSH	PSW
+   029c   3e 80         	MVI	A,CB.SPK	; TURN ON SPEAKER
                         
-   0295   e3            HRN0	XTHL			; SAVE (HL), (H) = COUNT
-   0296   d5            	PUSH	D		; SAVE (DE)
-   0297   eb            	XCHG			; (D) = LOOP COUNT
-   0298   21 09 20      	LXI	H,CTLFLG
-   029b   ae            	XRA	M
-   029c   5e            	MOV	E,M		; (E) = OLD CTLFLG VALUE
-   029d   77            	MOV	M,A		; TURN ON HORN
-   029e   2e 1b         	MVI	L,LOW TICCNT	; HRJ was TICCNT#256
+   029e   e3            HRN0	XTHL			; SAVE (HL), (H) = COUNT
+   029f   d5            	PUSH	D		; SAVE (DE)
+   02a0   eb            	XCHG			; (D) = LOOP COUNT
+   02a1   21 09 20      	LXI	H,CTLFLG
+   02a4   ae            	XRA	M
+   02a5   5e            	MOV	E,M		; (E) = OLD CTLFLG VALUE
+   02a6   77            	MOV	M,A		; TURN ON HORN
+   02a7   2e 1b         	MVI	L,LOW TICCNT	; HRJ was TICCNT#256
                         
-   02a0   7a            	MOV	A,D		; (A) = CYCLE COUNT
-   02a1   86            	ADD	M
-   02a2   be            HRN2	CMP	M		; WAIT REQUIRED TICCOUNTS
-   02a3   c2 a2 02      	JNZ	HRN2
-   02a6   2e 09         	MVI	L,LOW CTLFLG	; HRJ wass CTLFLG#256
-   02a8   73            	MOV	M,E		; TURN HORN OFF
-   02a9   d1            	POP	D
-   02aa   e1            	POP	H
-   02ab   c9            	RET
+   02a9   7a            	MOV	A,D		; (A) = CYCLE COUNT
+   02aa   86            	ADD	M
+   02ab   be            HRN2	CMP	M		; WAIT REQUIRED TICCOUNTS
+   02ac   c2 ab 02      	JNZ	HRN2
+   02af   2e 09         	MVI	L,LOW CTLFLG	; HRJ wass CTLFLG#256
+   02b1   73            	MOV	M,E		; TURN HORN OFF
+   02b2   d1            	POP	D
+   02b3   e1            	POP	H
+   02b4   c9            	RET
                         
                         ;	CTC - VERIFY CHECKSUM.
                         ;
@@ -1051,12 +1088,12 @@
                         ;		TO *TPERR* IF BAD
                         ;	USES	A,F,H,L
                         
-   02ac   cd 07 03      CTC	CALL	RNP		; READ NEXT PAIR
-   02af   2a 17 20      	LHLD	CRCSUM
-   02b2   7c            	MOV	A,H
-   02b3   b5            	ORA	L
-   02b4   c8            	RZ			; RETURN IF OK
-   02b5   3e 01         	MVI	A,1		; CHECKSUM ERROR
+   02b5   cd 10 03      CTC	CALL	RNP		; READ NEXT PAIR
+   02b8   2a 17 20      	LHLD	CRCSUM
+   02bb   7c            	MOV	A,H
+   02bc   b5            	ORA	L
+   02bd   c8            	RZ			; RETURN IF OK
+   02be   3e 01         	MVI	A,1		; CHECKSUM ERROR
                         ;	JMP	TPERR		; (B) = CODE
                         
                         ;	TPERR - PROCESS TAPE ERROR.
@@ -1068,37 +1105,37 @@
                         ;
                         ;	ENTRY	(A) = NUMBER
                         
-   02b7   32 14 20      TPERR	STA	ABUSS
-   02ba   47            	MOV	B,A		; (B) = CODE
-   02bb   cd 8d 02      	CALL	TFT		; TURN OFF TAPE
+   02c0   32 14 20      TPERR	STA	ABUSS
+   02c3   47            	MOV	B,A		; (B) = CODE
+   02c4   cd 96 02      	CALL	TFT		; TURN OFF TAPE
                         
                         ;	IS #, RETURN (IF PARITY ERROR)
                         
-   02be   e6            	DB	MI.ANI		; FALL THROUGH WITH CARRY CLEAR
-   02bf   78            TER3	MOV	A,B
+   02c7   e6            	DB	MI.ANI		; FALL THROUGH WITH CARRY CLEAR
+   02c8   78            TER3	MOV	A,B
                         
-   02c0   0f            	RRC
-   02c1   d8            	RC			; RETURN IF OK
+   02c9   0f            	RRC
+   02ca   d8            	RC			; RETURN IF OK
                         
                         ;	BEEP AND FLASH ERROR NUMBER
                         
-   02c2   dc 90 02      TER1	CC	ALARM		; ALARM IF PROPER TIME
-   02c5   cd dc 02      	CALL	TPXIT		; SEE IF #
-   02c8   db f0         	IN	IP.PAD
-   02ca   fe 2f         	CPI	00101111B	; CHECK FOR #
-   02cc   ca bf 02      	JZ	TER3		; IF #
-   02cf   3a 1c 20      	LDA	TICCNT+1
-   02d2   1f            	RAR			; 'C' SET IF 1/2 SECOND
-   02d3   c3 c2 02      	JMP	TER1
+   02cb   dc 99 02      TER1	CC	ALARM		; ALARM IF PROPER TIME
+   02ce   cd e5 02      	CALL	TPXIT		; SEE IF #
+   02d1   db f0         	IN	IP.PAD
+   02d3   fe 2f         	CPI	00101111B	; CHECK FOR #
+   02d5   ca c8 02      	JZ	TER3		; IF #
+   02d8   3a 1c 20      	LDA	TICCNT+1
+   02db   1f            	RAR			; 'C' SET IF 1/2 SECOND
+   02dc   c3 cb 02      	JMP	TER1
                         
                         ;	TPABT - ABORT TAPE LOAD OR DUMP.
                         ;
                         ;	ENTERED WHEN LOADING OR DUMPING, AND THE '*' KEY
                         ;	IS STRUCK.
                         
-   02d6   af            TPABT	XRA	A
-   02d7   d3 f9         	OUT	OP.TPC		; OFF TAPE
-   02d9   c3 46 01      	JMP	ERROR
+   02df   af            TPABT	XRA	A
+   02e0   d3 f9         	OUT	OP.TPC		; OFF TAPE
+   02e2   c3 4f 01      	JMP	ERROR
                         
                         ;	TPXIT - CHECK FOR USER FORCED EDIT.
                         ;
@@ -1111,12 +1148,12 @@
                         ;		TO (TPERRX) IF '*' DOWN
                         ;	USES	A,F
                         
-   02dc   db f0         TPXIT	IN	IP.PAD
-   02de   fe 6f         	CPI	01101111B	; *
-   02e0   db f9         	IN	IP.TPC		; READ TAPE STATUS
-   02e2   c0            	RNZ			; NOT '*', RETURN WITH STATUS
-   02e3   2a 19 20      	LHLD	TPERRX
-   02e6   e9            	PCHL			; ENTER (TPERRX)
+   02e5   db f0         TPXIT	IN	IP.PAD
+   02e7   fe 6f         	CPI	01101111B	; *
+   02e9   db f9         	IN	IP.TPC		; READ TAPE STATUS
+   02eb   c0            	RNZ			; NOT '*', RETURN WITH STATUS
+   02ec   2a 19 20      	LHLD	TPERRX
+   02ef   e9            	PCHL			; ENTER (TPERRX)
                         
                         ;	SRS - SCAN RECORD START
                         ;
@@ -1134,24 +1171,24 @@
                         ;		(HL) = RECORD COUNT
                         ;	USES	A,F,D,E,H,L
                         
-   02e7                 SRS
-   02e7   16 00         SRS1	MVI	D,0
-   02e9   62            	MOV	H,D
-   02ea   6a            	MOV	L,D		; (HL) = 0
-   02eb   cd 0b 03      SRS2	CALL	RNB		; READ NEXT BYTE
-   02ee   14            	INR	D
-   02ef   fe 16         	CPI	A.SYN
-   02f1   ca eb 02      	JZ	SRS2		; HAVE SYN
-   02f4   fe 02         	CPI	A.STX
-   02f6   c2 e7 02      	JNZ	SRS1		; NOT STX - START OVER
+   02f0                 SRS
+   02f0   16 00         SRS1	MVI	D,0
+   02f2   62            	MOV	H,D
+   02f3   6a            	MOV	L,D		; (HL) = 0
+   02f4   cd 14 03      SRS2	CALL	RNB		; READ NEXT BYTE
+   02f7   14            	INR	D
+   02f8   fe 16         	CPI	A.SYN
+   02fa   ca f4 02      	JZ	SRS2		; HAVE SYN
+   02fd   fe 02         	CPI	A.STX
+   02ff   c2 f0 02      	JNZ	SRS1		; NOT STX - START OVER
                         
-   02f9   3e 0a         	MVI	A,10
-   02fb   ba            	CMP	D		; SEE IF ENOUGH SYNC CHARACTERS
-   02fc   d2 e7 02      	JNC	SRS1		; NOT ENOUGH
-   02ff   22 17 20      	SHLD	CRCSUM		; CLEAR CRC-16
-   0302   cd 07 03      	CALL	RNP		; READ LEADER
-   0305   54            	MOV	D,H
-   0306   5f            	MOV	E,A
+   0302   3e 0a         	MVI	A,10
+   0304   ba            	CMP	D		; SEE IF ENOUGH SYNC CHARACTERS
+   0305   d2 f0 02      	JNC	SRS1		; NOT ENOUGH
+   0308   22 17 20      	SHLD	CRCSUM		; CLEAR CRC-16
+   030b   cd 10 03      	CALL	RNP		; READ LEADER
+   030e   54            	MOV	D,H
+   030f   5f            	MOV	E,A
                         ;	JMP	RNP		; READ COUNT
                         
                         ;	RNP - READ NEXT PAIR.
@@ -1162,8 +1199,8 @@
                         ;	EXIT	(H,A) = BYTE PAIR
                         ;	USES	A,F,H
                         
-   0307   cd 0b 03      RNP	CALL	RNB		; READ NEXT BYTE
-   030a   67            	MOV	H,A
+   0310   cd 14 03      RNP	CALL	RNB		; READ NEXT BYTE
+   0313   67            	MOV	H,A
                         ;	JMP	RNB		; READ NEXT BYTE
                         
                         ;	RNB - READ NEXT BYTE
@@ -1175,12 +1212,12 @@
                         ;	EXIT	(A) = CHARACTER
                         ;	USES	A,F
                         
-   030b   3e 34         RNB	MVI	A,UCI.RO+UCI.ER+UCI.RE ; TURN ON READER FOR NEXT BYTE
-   030d   d3 f9         	OUT	OP.TPC
-   030f   cd dc 02      RNB1	CALL	TPXIT		; CHECK FOR *, READ STATUS
-   0312   e6 02         	ANI	USR.RXR
-   0314   ca 0f 03      	JZ	RNB1		; IF NOT READY
-   0317   db f8         	IN	IP.TPD		; INPUT DATA
+   0314   3e 34         RNB	MVI	A,UCI.RO+UCI.ER+UCI.RE ; TURN ON READER FOR NEXT BYTE
+   0316   d3 f9         	OUT	OP.TPC
+   0318   cd e5 02      RNB1	CALL	TPXIT		; CHECK FOR *, READ STATUS
+   031b   e6 02         	ANI	USR.RXR
+   031d   ca 18 03      	JZ	RNB1		; IF NOT READY
+   0320   db f8         	IN	IP.TPD		; INPUT DATA
                         ;	JMP	CRC		; CHECKSUM
                         
                         
@@ -1192,9 +1229,9 @@
                         ;	EXIT	WRITTEN.
                         ;	USES	A,F
                         
-   0319   7c            WNP	MOV	A,H
-   031a   cd 1e 03      	CALL	WNB
-   031d   7d            	MOV	A,L
+   0322   7c            WNP	MOV	A,H
+   0323   cd 27 03      	CALL	WNB
+   0326   7d            	MOV	A,L
                         ;	JMP	WNB		; WRITE NEXT BYTE
                         
                         ;	WNB - WRITE NEXT BYTE
@@ -1205,15 +1242,15 @@
                         ;	EXIT	NONE.
                         ;	USES	F
                         
-   031e   f5            WNB	PUSH	PSW
-   031f   cd dc 02      WNB1	CALL	TPXIT		; CHECK FOR #, READ STATUS
-   0322   e6 01         	ANI	USR.TXR
-   0324   ca 1f 03      	JZ	WNB1		; IF MORE TO GO
-   0327   3e 11         	MVI	A,UCI.ER+UCI.TE ; ENABLE TRANSMITTER
-   0329   d3 f9         	OUT	OP.TPC		; TURN ON TAPE
-   032b   f1            	POP	PSW
-   032c   d3 f8         	OUT	OP.TPD		; OUTPUT DATA
-   032e   c3 7b 06      	JMP	CRC		; COMPUTE CRC
+   0327   f5            WNB	PUSH	PSW
+   0328   cd e5 02      WNB1	CALL	TPXIT		; CHECK FOR #, READ STATUS
+   032b   e6 01         	ANI	USR.TXR
+   032d   ca 28 03      	JZ	WNB1		; IF MORE TO GO
+   0330   3e 11         	MVI	A,UCI.ER+UCI.TE ; ENABLE TRANSMITTER
+   0332   d3 f9         	OUT	OP.TPC		; TURN ON TAPE
+   0334   f1            	POP	PSW
+   0335   d3 f8         	OUT	OP.TPD		; OUTPUT DATA
+   0337   c3 7b 06      	JMP	CRC		; COMPUTE CRC
                         
                         ;	LRA - LOCATE REGISTER ADDRESS
                         ;
@@ -1223,12 +1260,12 @@
                         ;		(D,E) = (0,A)
                         ;	USES	A,D,E,H,L,F
                         
-   0331   3a 05 20      LRA	LDA	REGI
-   0334   5f            LRA.	MOV	E,A
-   0335   16 00         	MVI	D,0
-   0337   2a 1d 20      	LHLD	REGPTR
-   033a   19            	DAD	D		; (DE) = (REGPTR)+(REGI)
-   033b   c9            	RET
+   033a   3a 05 20      LRA	LDA	REGI
+   033d   5f            LRA.	MOV	E,A
+   033e   16 00         	MVI	D,0
+   0340   2a 1d 20      	LHLD	REGPTR
+   0343   19            	DAD	D		; (DE) = (REGPTR)+(REGI)
+   0344   c9            	RET
                         
                         ;	IOA - INPUT OCTAL NUMBER
                         ;
@@ -1237,8 +1274,8 @@
                         ;		TO *RET*+1 IF OK, VALUE IN MEMORY.
                         ;	USES	A,B,E,H,C,F
                         
-   033c   cd 40 03      IOA	CALL	IOB		; INPUT BYTE
-   033f   2b            	DCX	H
+   0345   cd 49 03      IOA	CALL	IOB		; INPUT BYTE
+   0348   2b            	DCX	H
                         
                         ;	IOB - INPUT OCTAL BYTE.
                         ;
@@ -1250,24 +1287,24 @@
                         ;		TO *ERROR* IF ERROR
                         ;	USES	A,D,E,H,L,F
                         
-   0340   16 03         IOB	MVI	D,3		; (D) = DIGIT COUNT
-   0342   d4 33 06      IOB1	CNC	RCK		; READ CONSOLE KEYSET
+   0349   16 03         IOB	MVI	D,3		; (D) = DIGIT COUNT
+   034b   d4 33 06      IOB1	CNC	RCK		; READ CONSOLE KEYSET
                         
-   0345   fe 08         	CPI	8
-   0347   d2 46 01      	JNC	ERROR		; IF ILLEGAL DIGIT
+   034e   fe 08         	CPI	8
+   0350   d2 4f 01      	JNC	ERROR		; IF ILLEGAL DIGIT
                         
-   034a   5f            	MOV	E,A		; (E) = VALUE
-   034b   7e            	MOV	A,M
-   034c   07            	RLC			; SHIFT 3
-   034d   07            	RLC
-   034e   07            	RLC
-   034f   e6 f8         	ANI	370Q
-   0351   b3            	ORA	E
-   0352   77            	MOV	M,A		; REPLACE
-   0353   15            	DCR	D
-   0354   c2 42 03      	JNZ	IOB1		; IF NOT DONE
-   0357   3e 0f         	MVI	A,30/2		; BEEP FOR 30 MS
-   0359   c3 92 02      	JMP	HORN
+   0353   5f            	MOV	E,A		; (E) = VALUE
+   0354   7e            	MOV	A,M
+   0355   07            	RLC			; SHIFT 3
+   0356   07            	RLC
+   0357   07            	RLC
+   0358   e6 f8         	ANI	370Q
+   035a   b3            	ORA	E
+   035b   77            	MOV	M,A		; REPLACE
+   035c   15            	DCR	D
+   035d   c2 4b 03      	JNZ	IOB1		; IF NOT DONE
+   0360   3e 0f         	MVI	A,30/2		; BEEP FOR 30 MS
+   0362   c3 9b 02      	JMP	HORN
                         
                         ;	DOD - DECODE FOR OCTAL DISPLAY
                         ;
@@ -1277,30 +1314,30 @@
                         ;	EXIT	(H,L) = HEX DIGIT ADDRESS
                         ;	USES	A,B,C,D,H,L
                         
-   035c   d5            DOD	PUSH	D
-   035d   16 06         	MVI	D,DODA/256
-   035f   0e 03         	MVI	C,3
-   0361   17            DOD1	RAL			; LEFT 3 PLACES
-   0362   17            	RAL
-   0363   17            	RAL
-   0364   f5            	PUSH	PSW		; SAVE FOR NEXT DIGIT
-   0365   e6 07         	ANI	7
-   0367   c6 71         	ADI	LOW DODA	; HRJ was DODA#256
-   0369   5f            	MOV	E,A		; (D) = INDEX
-   036a   1a            	LDAX	D		; (A) = PATTERN
-   036b   a8            	XRA	B
-   036c   e6 7f         	ANI	177Q
-   036e   a8            	XRA	B
-   036f   77            	MOV	M,A		; SET IN MEMORY
-   0370   23            	INX	H
-   0371   78            	MOV	A,B
-   0372   07            	RLC
-   0373   47            	MOV	B,A
-   0374   f1            	POP	PSW		; (A) = VALUE
-   0375   0d            	DCR	C
-   0376   c2 61 03      	JNZ	DOD1		; IF MORE TO GO
-   0379   d1            	POP	D
-   037a   c9            	RET			; RETURN
+   0365   d5            DOD	PUSH	D
+   0366   16 06         	MVI	D,DODA/256
+   0368   0e 03         	MVI	C,3
+   036a   17            DOD1	RAL			; LEFT 3 PLACES
+   036b   17            	RAL
+   036c   17            	RAL
+   036d   f5            	PUSH	PSW		; SAVE FOR NEXT DIGIT
+   036e   e6 07         	ANI	7
+   0370   c6 71         	ADI	LOW DODA	; HRJ was DODA#256
+   0372   5f            	MOV	E,A		; (D) = INDEX
+   0373   1a            	LDAX	D		; (A) = PATTERN
+   0374   a8            	XRA	B
+   0375   e6 7f         	ANI	177Q
+   0377   a8            	XRA	B
+   0378   77            	MOV	M,A		; SET IN MEMORY
+   0379   23            	INX	H
+   037a   78            	MOV	A,B
+   037b   07            	RLC
+   037c   47            	MOV	B,A
+   037d   f1            	POP	PSW		; (A) = VALUE
+   037e   0d            	DCR	C
+   037f   c2 6a 03      	JNZ	DOD1		; IF MORE TO GO
+   0382   d1            	POP	D
+   0383   c9            	RET			; RETURN
                         
                         ;	UFD - UPDATE FRONT PANEL DISPLAYS.
                         ;
@@ -1314,58 +1351,58 @@
                         ;	EXIT	NONE
                         ;	USES	ALL
                         
-   037b   3e 02         UFD	MVI	A,UO.DDU	; Disable Display Update
-   037d   a0            	ANA	B		; in MFLAG?
-   037e   c0            	RNZ			; IF NOT TO HANDLE UPDATE
+   0384   3e 02         UFD	MVI	A,UO.DDU	; Disable Display Update
+   0386   a0            	ANA	B		; in MFLAG?
+   0387   c0            	RNZ			; IF NOT TO HANDLE UPDATE
                         
-   037f   2e 06         	MVI	L,LOW DSPROT	; (HL) = DSPROT (same page)
-   0381   7e            	MOV	A,M		; fetch period pattern
-   0382   07            	RLC			; rotate it left
-   0383   77            	MOV	M,A		; and save
-   0384   47            	MOV	B,A
-   0385   23            	INX	H		; now point to DSPMOD
+   0388   2e 06         	MVI	L,LOW DSPROT	; (HL) = DSPROT (same page)
+   038a   7e            	MOV	A,M		; fetch period pattern
+   038b   07            	RLC			; rotate it left
+   038c   77            	MOV	M,A		; and save
+   038d   47            	MOV	B,A
+   038e   23            	INX	H		; now point to DSPMOD
                         ;	ERRNZ	DSPMOD-DSPROT-1	; code assumes DSPMOD follows DSPROT
-   0386   7e            	MOV	A,M		; (A) = DSPMOD
-   0387   e6 02         	ANI	00000010B	; Memory display mode?
-   0389   2a 14 20      	LHLD	ABUSS
-   038c   ca a1 03      	JZ	UFD1		; IF MEMORY
+   038f   7e            	MOV	A,M		; (A) = DSPMOD
+   0390   e6 02         	ANI	00000010B	; Memory display mode?
+   0392   2a 14 20      	LHLD	ABUSS
+   0395   ca aa 03      	JZ	UFD1		; IF MEMORY
                         
                         ;	Displaying registers
                         
-   038f   cd 31 03      	CALL	LRA		; LOCATE REGISTER ADDRESS
-   0392   e5            	PUSH	H
-   0393   21 65 06      	LXI	H,DSPA
-   0396   19            	DAD	D		; (H,L) = ADDRESS OF REG NAME PATTERNS
-   0397   7e            	MOV	A,M
-   0398   23            	INX	H
-   0399   66            	MOV	H,M
-   039a   6f            	MOV	L,A		; (H,L) = REG NAME PATTERN
-   039b   e3            	XTHL
-   039c   b4            	ORA	H		; CLEAR 'Z'
-   039d   7e            	MOV	A,M
-   039e   23            	INX	H
-   039f   66            	MOV	H,M
-   03a0   6f            	MOV	L,A		; (HL) = ADDRESS OF REGISTER PAIR CONTENTS
+   0398   cd 3a 03      	CALL	LRA		; LOCATE REGISTER ADDRESS
+   039b   e5            	PUSH	H
+   039c   21 65 06      	LXI	H,DSPA
+   039f   19            	DAD	D		; (H,L) = ADDRESS OF REG NAME PATTERNS
+   03a0   7e            	MOV	A,M
+   03a1   23            	INX	H
+   03a2   66            	MOV	H,M
+   03a3   6f            	MOV	L,A		; (H,L) = REG NAME PATTERN
+   03a4   e3            	XTHL
+   03a5   b4            	ORA	H		; CLEAR 'Z'
+   03a6   7e            	MOV	A,M
+   03a7   23            	INX	H
+   03a8   66            	MOV	H,M
+   03a9   6f            	MOV	L,A		; (HL) = ADDRESS OF REGISTER PAIR CONTENTS
                         
                         ;	Displaying Memory
                         
-   03a1   f5            UFD1	PUSH	PSW
-   03a2   eb            	XCHG
-   03a3   21 0b 20      	LXI	H,ALEDS
-   03a6   7a            	MOV	A,D
-   03a7   cd 5c 03      	CALL	DOD		; FORMAT ABANK HIGH HALF
-   03aa   7b            	MOV	A,E
-   03ab   cd 5c 03      	CALL	DOD		; FORMAT ABANK LOW HALF
-   03ae   f1            	POP	PSW
-   03af   1a            	LDAX	D
-   03b0   ca 5c 03      	JZ	DOD		; IF MEMORY, DECODE BYTE VALUE
+   03aa   f5            UFD1	PUSH	PSW
+   03ab   eb            	XCHG
+   03ac   21 0b 20      	LXI	H,ALEDS
+   03af   7a            	MOV	A,D
+   03b0   cd 65 03      	CALL	DOD		; FORMAT ABANK HIGH HALF
+   03b3   7b            	MOV	A,E
+   03b4   cd 65 03      	CALL	DOD		; FORMAT ABANK LOW HALF
+   03b7   f1            	POP	PSW
+   03b8   1a            	LDAX	D
+   03b9   ca 65 03      	JZ	DOD		; IF MEMORY, DECODE BYTE VALUE
                         
                         ;	IS REGISTER, SET REGISTER NAME,
                         
-   03b3   36 00         	MVI	M,0		; CLEAR DIGIT - gfr
-   03b5   e1            	POP	H
-   03b6   22 12 20      	SHLD	DLEDS+1
-   03b9   c9            	RET
+   03bc   36 00         	MVI	M,0		; CLEAR DIGIT - gfr
+   03be   e1            	POP	H
+   03bf   22 12 20      	SHLD	DLEDS+1
+   03c2   c9            	RET
                         
                         
                         ;	I/O ROUTINES TO BE COPIED INTO AND USED IN RAM.
@@ -1816,7 +1853,7 @@
    0539   cd 48 04      INPCMD:	CALL	GETHEX		; Get port from console
    053c   6f            	MOV	L,A		; save in (L)
    053d   cd c7 04      	CALL	PRTSPC		; space separator
-   0540   cd f3 01      	CALL	IN		; input via PAM-8 IN routine
+   0540   cd fc 01      	CALL	IN		; input via PAM-8 IN routine
    0543   c3 b3 04      	JMP	PRTHEX		; display the result
                         
                         ;
@@ -1830,7 +1867,7 @@
    054a   cd c7 04      	CALL	PRTSPC		; space separator
    054d   cd 48 04      	CALL	GETHEX		; get value to output
    0550   67            	MOV	H,A		; (H) = value
-   0551   c3 f6 01      	JMP	OUT		; output via PAM-8 OUT routine
+   0551   c3 ff 01      	JMP	OUT		; output via PAM-8 OUT routine
                         
                         ;
                         ;LODCMD -- Load an Intel HEX file from console
@@ -2168,7 +2205,7 @@
    0656   d2 3a 06      	JNC	RCK1		; NO HIT AT ALL
    0659   47            RCK3	MOV	B,A		; (B) = CODE
    065a   3e 02         	MVI	A,4/2
-   065c   cd 92 02      	CALL	HORN		; MAKE BIP
+   065c   cd 9b 02      	CALL	HORN		; MAKE BIP
    065f   78            	MOV	A,B
    0660   e6 0f         	ANI	17Q
    0662   c1            	POP	B
@@ -2276,7 +2313,7 @@
                         ;		TO ERROR EXIT IF TAPE ERRORS DETECTED.
                         
    06a3   01 00 fe      LOAD	LXI	B,177000Q	 ; 400Q-RT.MI*256-256 (BC) = - REQUIRED TYPE AND #
-   06a6   cd e7 02      LOA0	CALL	SRS		; SCAN FOR RECORD START
+   06a6   cd f0 02      LOA0	CALL	SRS		; SCAN FOR RECORD START
    06a9   6f            	MOV	L,A		; (HL) = COUNT
    06aa   eb            	XCHG			; (DE) = COUNT, (HL) = TYPE AND #
    06ab   0d            	DCR	C		; (C) = - NEXT #
@@ -2287,22 +2324,22 @@
    06b0   e6 7f         	ANI	177Q		; CLEAR END FLAG BIT
    06b2   b5            	ORA	L
    06b3   3e 02         	MVI	A,2		; SEQUENCE ERROR
-   06b5   c2 b7 02      	JNZ	TPERR		; IF NOT RIGHT TYPE OF SEQUENCE
-   06b8   cd 07 03      	CALL	RNP		; READ ADDR
+   06b5   c2 c0 02      	JNZ	TPERR		; IF NOT RIGHT TYPE OF SEQUENCE
+   06b8   cd 10 03      	CALL	RNP		; READ ADDR
    06bb   44            	MOV	B,H
    06bc   4f            	MOV	C,A		; (BC) = P-REG ADDRESS
    06bd   3e 0a         	MVI	A,10
    06bf   d5            	PUSH	D		; SAVE (DE)
-   06c0   cd 34 03      	CALL	LRA.		; LOCATE REG ADDRESS
+   06c0   cd 3d 03      	CALL	LRA.		; LOCATE REG ADDRESS
    06c3   d1            	POP	D		; RESTORE (DE)
    06c4   71            	MOV	M,C		; SET P-REG IN MEM
    06c5   23            	INX	H
    06c6   70            	MOV	M,B
-   06c7   cd 07 03      	CALL	RNP		; READ ADDRESS
+   06c7   cd 10 03      	CALL	RNP		; READ ADDRESS
    06ca   6f            	MOV	L,A		; (HL) = ADDRESS, (DE) = COUNT
    06cb   22 00 20      	SHLD	START
                         
-   06ce   cd 0b 03      LOA1	CALL	RNB		; READ BYTE
+   06ce   cd 14 03      LOA1	CALL	RNB		; READ BYTE
    06d1   77            	MOV	M,A
    06d2   22 14 20      	SHLD	ABUSS		; SET ABUSS FOR DISPLAY
    06d5   23            	INX	H
@@ -2311,14 +2348,14 @@
    06d8   b3            	ORA	E
    06d9   c2 ce 06      	JNZ	LOA1		; IF MORE TO GO
                         
-   06dc   cd ac 02      	CALL	CTC		; CHECK TAPE CHECKSUM
+   06dc   cd b5 02      	CALL	CTC		; CHECK TAPE CHECKSUM
                         
                         ;	READ NEXT BLOCK
                         
    06df   f1            	POP	PSW		; (A) = FILE TYPE BYTE
    06e0   c1            	POP	B		; (BC) = -(LAST TYPE, LAST #0
    06e1   07            	RLC
-   06e2   da 8d 02      	JC	TFT		; ALL DONE - TURN OFF TAPE
+   06e2   da 96 02      	JC	TFT		; ALL DONE - TURN OFF TAPE
    06e5   c3 a6 06      	JMP	LOA0		; READ ANOTHER RECORD
                         
                         ;
@@ -2392,68 +2429,70 @@
                         ;
                         ;	new RAM locations for MiniPAM8
                         ;
-   2034                 KEYVAL	DS	1	; FP Key value from most recent scan (every tick)
+   2034                 PCKVAL	DS	1	; PCK value from most recent scan (9 ticks)
+   2035                 PCKTMP	DS	1	; temporary candidate keypad response from PCK
                         
-   2035                 	END
-0002  A.STX         0016  A.SYN         01db  ABORT         2014  ABUSS     
-0290  ALARM         200b  ALEDS         0470  ASCHEX        0137  BITTIME   
+   2036                 	END
+0002  A.STX         0016  A.SYN         01e4  ABORT         2014  ABUSS     
+0299  ALARM         200b  ALEDS         0470  ASCHEX        0137  BITTIME   
 0008  BS            0003  CANCEL        0040  CB.CLI        0020  CB.MTL    
 0080  CB.SPK        0010  CB.SSI        05d8  CI1           05e4  CI2       
 05ec  CI3           05ef  CI4           0605  CI5           0459  CIN       
-05d6  CINNE         00b8  CLK2          00bd  CLK3          0146  CLK4      
+05d6  CINNE         00ba  CLK2          00bf  CLK3          014f  CLK4      
 009d  CLOCK         040d  CMDLP         041f  CMDLP1        05be  CMDTAB    
 0617  CO1           061e  CO2           060f  COUT          000d  CR        
 067b  CRC           0682  CRC1          0698  CRC2          2017  CRCSUM    
-04cc  CRLF          04f7  CSERR$        05a9  CSUMER        02ac  CTC       
+04cc  CRLF          04f7  CSERR$        05a9  CSUMER        02b5  CTC       
 0003  CTLC          2009  CTLFLG        0003  CTRL          2011  DLEDS     
 0053  DLY           0000  DM.MR         0001  DM.MW         0002  DM.RR     
-0003  DM.RW         04b2  DMPLOC        035c  DOD           0361  DOD1      
+0003  DM.RW         04b2  DMPLOC        0365  DOD           036a  DOD1      
 0671  DODA          0665  DSPA          2007  DSPMOD        2006  DSPROT    
-0234  DUMP          0513  EDTCM1        0531  EDTCM2        0510  EDTCMD    
-04fd  ERR$          042d  ERRMSG        0146  ERROR         200b  FPLEDS    
-043f  GETADR        044b  GETHE2        0448  GETHEX        0206  GO        
+023d  DUMP          0513  EDTCM1        0531  EDTCM2        0510  EDTCMD    
+04fd  ERR$          042d  ERRMSG        014f  ERROR         200b  FPLEDS    
+043f  GETADR        044b  GETHE2        0448  GETHEX        020f  GO        
 001b  GO.           0535  GOCMD         0400  GWMON         011c  HALFBIT   
 0502  HDCMD         045f  HEXBYT        0481  HEXDM1        0486  HEXDM2    
-0497  HEXDM3        047f  HEXDMP        0292  HORN          0295  HRN0      
-02a2  HRN2          01f3  IN            0061  INIT          0000  INIT0     
+0497  HEXDM3        047f  HEXDMP        029b  HORN          029e  HRN0      
+02ab  HRN2          01fc  IN            0061  INIT          0000  INIT0     
 0539  INPCMD        002c  INT5.5        0034  INT6.5        003c  INT7.5    
 0096  INTXIT        0000  IO.A          0001  IO.B          0002  IO.C      
-033c  IOA           0340  IOB           0342  IOB1          2002  IOWRK     
+0345  IOA           0349  IOB           034b  IOB1          2002  IOWRK     
 00f0  IP.PAD        00f9  IP.TPC        00f8  IP.TPD        05d1  IRQSET    
-0080  K0            2034  KEYVAL        0020  KMATH         0010  KNUM      
-0040  KR            01dc  LAST          000a  LF            06a6  LOA0      
-06ce  LOA1          06a3  LOAD          0567  LODCM0        056a  LODCM1    
-0589  LODCM2        0594  LODCM3        059e  LODCM4        0554  LODCMD    
-05af  LODEXT        0331  LRA           0334  LRA.          01e0  LST2      
-01e9  MEMM          2008  MFLAG         00e6  MI.ANI        0076  MI.HLT    
-00db  MI.IN         003a  MI.LDA        0011  MI.LXID       00d3  MI.OUT    
-00c9  MI.RET        0158  MTR           0159  MTR1          0179  MTR4      
-019d  MTR5          01ab  MTR6          0191  MTRA          01ce  NEXT      
-000d  NEXTLOC       05d0  NULCMD        00f0  OP.CTL        00f0  OP.DIG    
-00f1  OP.SEG        00f9  OP.TPC        00f8  OP.TPD        01f6  OUT       
-0546  OUTCMD        00c7  PCK           00f2  PCK0          0119  PCK1      
-010a  PCK2          0115  PCKTBL        011c  PCKX          00f0  PPI       
+0080  K0            0020  KMATH         0010  KNUM          0040  KR        
+01e5  LAST          000a  LF            06a6  LOA0          06ce  LOA1      
+06a3  LOAD          0567  LODCM0        056a  LODCM1        0589  LODCM2    
+0594  LODCM3        059e  LODCM4        0554  LODCMD        05af  LODEXT    
+033a  LRA           033d  LRA.          01e9  LST2          01f2  MEMM      
+2008  MFLAG         00e6  MI.ANI        0076  MI.HLT        00db  MI.IN     
+003a  MI.LDA        0011  MI.LXID       00d3  MI.OUT        00c9  MI.RET    
+0161  MTR           0162  MTR1          0182  MTR4          01a6  MTR5      
+01b4  MTR6          019a  MTRA          01d7  NEXT          000d  NEXTLOC   
+05d0  NULCMD        00f0  OP.CTL        00f0  OP.DIG        00f1  OP.SEG    
+00f9  OP.TPC        00f8  OP.TPD        01ff  OUT           0546  OUTCMD    
+00c9  PCK           0118  PCK1          00e6  PCKM          00fe  PCKM1     
+0114  PCKN          011b  PCKQ          010b  PCKR          2035  PCKTMP    
+2034  PCKVAL        0126  PCKX          0110  PCKZ          00f0  PPI       
 8058  PPS           0058  PPSROM        04f5  PROMPT$       0007  PRSL      
 2004  PRSRAM        03f9  PRSROM        04a2  PRTADR        04d6  PRTCLS    
 0430  PRTERR        04b3  PRTHEX        04bc  PRTNIB        04c7  PRTSPC    
 04d9  PRTSTR        0633  RCK           063a  RCK1          064b  RCK2      
 0659  RCK3          2016  RCKA          200a  REFIND        2005  REGI      
-01b8  REGM          201d  REGPTR        00a4  RFP           0225  RMEM      
-030b  RNB           030f  RNB1          0307  RNP           0436  RUNCMD    
-01ca  RW            01a7  SAE           007b  SAVALL        00fa  SC.UART   
-04e6  SIGNON$       02e7  SRS           02e7  SRS1          02eb  SRS2      
-0211  SST1          0209  SSTEP         8000  STACK         2000  START     
-0218  STPRTN        02c2  TER1          02bf  TER3          028d  TFT       
-201b  TICCNT        02d6  TPABT         02b7  TPERR         2019  TPERRX    
-02dc  TPXIT         0010  UCI.ER        0002  UCI.IE        0040  UCI.IR    
+01c1  REGM          201d  REGPTR        00a4  RFP           022e  RMEM      
+0314  RNB           0318  RNB1          0310  RNP           0436  RUNCMD    
+01d3  RW            01b0  SAE           007b  SAVALL        00fa  SC.UART   
+04e6  SIGNON$       02f0  SRS           02f0  SRS1          02f4  SRS2      
+021a  SST1          0212  SSTEP         8000  STACK         2000  START     
+0221  STPRTN        02cb  TER1          02c8  TER3          0296  TFT       
+201b  TICCNT        02df  TPABT         02c0  TPERR         2019  TPERRX    
+02e5  TPXIT         0010  UCI.ER        0002  UCI.IE        0040  UCI.IR    
 0004  UCI.RE        0020  UCI.RO        0001  UCI.TE        0000  UDR       
-037b  UFD           03a1  UFD1          0001  UI.CLK        201f  UIVEC     
+0384  UFD           03aa  UFD1          0001  UI.CLK        201f  UIVEC     
 0002  UMI.16X       0040  UMI.1B        0001  UMI.1X        00c0  UMI.2B    
 0003  UMI.64X       0080  UMI.HB        0000  UMI.L5        0004  UMI.L6    
 0008  UMI.L7        000c  UMI.L8        0010  UMI.PA        0020  UMI.PE    
 0002  UO.DDU        0080  UO.HLT        0040  UO.NFR        0001  USR       
 0040  USR.BD        86a0  USR.FE        0010  USR.OE        0008  USR.PE    
-0002  USR.RXR       0004  USR.TXE       0001  USR.TXR       023c  WME1      
-0276  WME2          022e  WMEM          031e  WNB           031f  WNB1      
-0319  WNP           040a  WSTART        
+0002  USR.RXR       0004  USR.TXE       0001  USR.TXR       0245  WME1      
+027f  WME2          0237  WMEM          0327  WNB           0328  WNB1      
+0322  WNP           040a  WSTART        
 

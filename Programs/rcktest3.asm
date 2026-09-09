@@ -17,7 +17,7 @@ IO.A	EQU	0
 ;
 ;	Debounce and auto-repeat delays (ms)
 ;
-DBDLY	EQU	20
+DBDLY	EQU	10
 ARDLY	EQU	400
 
 ;
@@ -29,10 +29,13 @@ PRTHEX	EQU	04B3H		; print byte in A in hex
 PRTSPC	EQU	04C7H		; print a space
 PRTCLS	EQU	04D6H		; print CR/LF then string
 PRTSTR	EQU	04D9H		; print string
+CRLF	EQU	04CCH		; print CR/LF
 KEYVAL	EQU	2034H		; temp storage for key value
 RCKA	EQU	2016H		; key passing byte
 
 	ORG	2040h		; ORG at 040.100
+	
+START:	CALL	CRLF		; start on a new line
 ;
 ;	Assumes PPI has been initialized by the ROM
 ;
@@ -45,7 +48,7 @@ LOOP:	CALL	RCK		; read console keypad (blocking read)
 ;	debounce
 ;
 	CALL	PRTHEX		; print the value
-	CALL	PRTSPC		; and a separator
+	CALL	CRLF		; new line
 	
 	JMP	LOOP		; and loop forever...
 
@@ -95,4 +98,4 @@ RK1:	MOV	A,M		; fetch possible key value
 	JM	RK1		; loop 'til not negative
 	RET
 
-	END	LOOP
+	END	START
