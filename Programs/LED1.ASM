@@ -16,7 +16,7 @@ CTLPORT	EQU	360Q
 ;
 ;	Org at 40K but we will store in ROM at 2000H
 ;
-	ORG	0A000H
+	ORG	02040H
 ;
 ; Here's the classic LED demo code ...
 ;

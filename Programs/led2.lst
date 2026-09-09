@@ -1,0 +1,59 @@
+                        ; Recreation of LED2 demo from early HUG
+                        ;
+                        ; Assembled with A85 for H8 Mini
+                        ;
+                        ; G. Roberts	September 2026
+                        ;
+                        
+   200b                 .ALEDS	EQU	200BH		; ABUSS LEDs
+   2008                 .MFLAG	EQU	2008H		; User Option Byte
+   0002                 UO.DDU	EQU	00000010B	; Disable Display Update
+   201b                 .TICCNT EQU	201BH		; Clock Tick Counter
+                        
+   2040                 	ORG	2040H
+                        ;
+                        ; Here's the classic LED2 demo code ...
+                        ;
+   2040   0e 01         LED2	MVI	C,1		; C stores pattern byte for LEDs
+   2042   21 1b 20      	LXI	H,.TICCNT	; Low byte of tick counter
+                        ;
+                        ;
+   2045   7e            LOOP1	MOV	A,M
+   2046   e6 32         	ANI	32H
+   2048   fe 32         	CPI	32H
+   204a   c2 45 20      	JNZ	LOOP1
+                        ;
+                        ;	Now prepare to display the patterns. Disable normal
+                        ;	LED updates but leave LEDs lit
+                        ;
+   204d   21 08 20      	LXI	H,.MFLAG
+   2050   36 02         	MVI	M,UO.DDU	; Disable ROM LED updates
+                        ;
+                        ;	Memory pointer (HL) points to LED locations. Update
+                        ;	all 9 of them.
+                        ;
+   2052   21 0b 20      	LXI	H,.ALEDS
+   2055   0d            	DCR	C		; Go to next pattern mask
+                        ;
+                        ;	Store the pattern in all 9 LED locations
+                        ;
+   2056   06 09         	MVI	B,9
+   2058   71            LOOP2	MOV	M,C		; C into the LED patterns
+   2059   23            	INX	H
+   205a   05            	DCR	B
+   205b   c2 58 20      	JNZ	LOOP2
+                        ;
+                        
+                        ;	
+   205e   21 1b 20      	LXI	H,.TICCNT	; Low byte of tick counter
+   2061   7e            LOOP3	MOV	A,M
+   2062   e6 32         	ANI	32H
+   2064   fe 32         	CPI	32H
+   2066   ca 61 20      	JZ	LOOP3
+                        
+   2069   c3 45 20      	JMP	LOOP1
+                        
+   2040                 	END	LED2
+200b  .ALEDS        2008  .MFLAG        201b  .TICCNT       2040  LED2      
+2045  LOOP1         2058  LOOP2         2061  LOOP3         0002  UO.DDU    
+

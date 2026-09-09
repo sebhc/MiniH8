@@ -8,8 +8,14 @@
    200b                 FPLEDS	EQU	200BH		; LED refresh area
    2008                 MFLAG	EQU	2008H
    0053                 DLY	EQU	0053H		; relocated from PAM/8 location
-                        
-                        ;HORN	EQU	0		; TBD (not yet implemented)
+                        ;
+                        ;	H8 Mini equates
+                        ;
+                        ;	8255 PPI at 0F0-0F3
+                        ;
+   00f0                 PPI	EQU	0F0H
+   0000                 IO.A	EQU	0
+   0001                 IO.B	EQU	1
                         
    2040                 	ORG	2040H
                         ;
@@ -19,7 +25,7 @@
    2042   32 08 20      	STA	MFLAG
                         	
    2045   06 04         START	MVI	B,4		; Four sets of patterns
-   2047   21 72 20      	LXI	H,LEDPAT	; LED patterns to display
+   2047   21 c1 20      	LXI	H,LEDPAT	; LED patterns to display
    204a   11 0b 20      DEMO0	LXI	D,FPLEDS	; LED pattern fields
                         	
    204d   0e 09         	MVI	C,9		; 9 LEDs
@@ -40,62 +46,153 @@
                         
    2062   05            	DCR	B		; next pattern
    2063   c2 4a 20      	JNZ	DEMO0
-                        	
-   2066   3e 32         	MVI	A,50		; 100 ms beep
-                        ;	CALL	HORN
+                        ;
+                        ;	Now beep three times. best done with interrupts off
+                        ;
+   2066   f3            	DI			; interrupts off
+                        ;
+                        ;	Now let's blank any front panel LEDs that were left lit when
+                        ;	we killed the update.
+                        ;
+   2067   db f0         BLANK:	IN	PPI+IO.A	; read port A settings
+   2069   e6 f0         	ANI	11110000B	; clear LED selects (PA0..PA3)
+   206b   47            	MOV	B,A		; save it
+   206c   0e 09         	MVI	C,9		; 9 LEDs
+   206e   81            BLOOP:	ADD	C		; address an LED
+   206f   d3 f0         	OUT	PPI+IO.A	; select it
+   2071   af            	XRA	A		; zero = all segments off
+   2072   d3 f1         	OUT	PPI+IO.B	; turn off all segments
+   2074   78            	MOV	A,B		; get back mask
+   2075   0d            	DCR	C		; count down
+   2076   c2 6e 20      	JNZ	BLOOP		; and loop through all 9
+                        ;
+                        ;	set speaker to "high" state
+                        ;
+   2079   db f0         	IN	PPI+IO.A	; Read Port A settings
+   207b   e6 3f         	ANI	00111111B	; Clear top two bits (PA6-7)
+   207d   f6 80         	ORI	10000000B	; PA7 on; PA6 off
+   207f   d3 f0         	OUT	PPI+IO.A	; set speaker bit
+                        ;
+                        ;	Play beeps.
+                        ;
+   2081   06 35         	MVI	B,53		; 1046.5 Hz = C6 or "High" C)
+   2083   0e 69         	MVI	C,105		; 100 ms duration
+   2085   cd 9c 20      	CALL	TONE
                         
-   2068   3e 32         	MVI	A,50		; 100 ms delay
-   206a   cd 53 00      	CALL	DLY
+   2088   cd b4 20      	CALL	DLY100		; pause, 100ms
                         	
-   206d   3e 32         	MVI	A,50		; 100 ms beep
-                        ;	CALL	HORN
+   208b   06 35         	MVI	B,53		; 1046.5 Hz = C6 or "High" C)
+   208d   0e 69         	MVI	C,105		; 100 ms duration
+   208f   cd 9c 20      	CALL	TONE
+                        ;
+                        ;	set speaker outputs both "low"
+                        ;
+   2092   db f0         	IN	PPI+IO.A	; Read Port A settings
+   2094   e6 3f         	ANI	00111111B	; Clear top two bits (PA6-7)
+   2096   d3 f0         	OUT	PPI+IO.A	; set speaker bit
                         	
-   206f   c3 45 20      	JMP	START		; Loop forever ...
+   2098   fb            	EI			; interrupts back on
+                        	
+   2099   c3 45 20      	JMP	START		; Loop forever ...
+                        ;
+                        ;	TONE - play a note. set speaker high, wait 1/2 period, then
+                        ;	set speaker low. repeat for note duration.
+                        ;
+                        ;	This loop uses the pitch value to determine how long to wait
+                        ;	between high and low (half period), toggling the speaker through
+                        ;	a number of cycles determined by the note duration.
+                        ;
+                        ;	ENTRY:	(B)	pitch value
+                        ;		(C)	note duration
+                        ;	
+   209c   50            TONE:	MOV	D,B		; wait 1/2 cycle
+   209d   cd ae 20      	CALL	DELAY		; "high" state duration
+                        ;
+                        ;	Now toggle the speaker
+                        ;
+   20a0   db f0         	IN	PPI+IO.A	; Read Port A settings
+   20a2   ee c0         	XRI	11000000B	; toggle PA6, PA7
+   20a4   d3 f0         	OUT	PPI+IO.A	; set speaker to "low"
+                        
+   20a6   50            	MOV	D,B		; wait second 1/2 cycle
+   20a7   cd ae 20      	CALL	DELAY		; "low" state duration
+                        
+   20aa   0d            	DCR	C		; Decrement duration counter
+   20ab   c2 9c 20      	JNZ	TONE		; Repeat square wave cycle if duration is not finished
+                        ;
+                        ;
+                        ;	DELAY just kills 9 uS of time
+                        ;
+   20ae   00            DELAY:	NOP			; 4 cycles
+   20af   15            	DCR	D		; 4 cycles
+   20b0   c2 ae 20      	JNZ	DELAY		; 10 cycles
+   20b3   c9            	RET
+                        	
+                        ; =====================================================================
+                        ;
+                        ; from Google AI
+                        ;
+                        ; DLY100 - Pause execution for 100 milliseconds (at 2 MHz clock)
+                        ; For use when front 2ms clock is disabled)
+                        ;
+                        ; USES: BC
+                        ;
+                        ; =====================================================================
+   20b4   06 64         DLY100:	MVI	B,100		; [7 T-states] Outer loop counter: repeat 100 times
+   20b6   0e 52         OUTER:	MVI	C,82		; [7 T-states] Inner loop counter
+   20b8   0d            INNER:	DCR	C		; [5 T-states] Decrement inner counter
+   20b9   c2 b8 20      	JNZ	INNER		; [10 T-states if jump, 7 T-states if fallback]
+   20bc   05            	DCR	B		; [5 T-states] Decrement outer counter
+   20bd   c2 b6 20      	JNZ	OUTER		; [10 T-states if jump, 7 T-states if fallback]
+   20c0   c9            	RET			; [10 T-states] Return to caller
+                        
                         ;
                         ; 	LED patterns to display (four sets of 9)
                         ;
-   2072   00            LEDPAT	DB	00000000B	; <blank>
-   2073   4d            	DB	01001101B	; Y
-   2074   47            	DB	01000111B	; o
-   2075   45            	DB	01000101B	; u
-   2076   42            	DB	01000010B	; r
-   2077   00            	DB	00000000B	; <blank>
-   2078   6d            	DB	01101101B	; H
-   2079   7f            	DB	01111111B	; 8
-   207a   00            	DB	00000000B	; <blank>
+   20c1   00            LEDPAT	DB	00000000B	; <blank>
+   20c2   4d            	DB	01001101B	; Y
+   20c3   47            	DB	01000111B	; o
+   20c4   45            	DB	01000101B	; u
+   20c5   42            	DB	01000010B	; r
+   20c6   00            	DB	00000000B	; <blank>
+   20c7   6d            	DB	01101101B	; H
+   20c8   7f            	DB	01111111B	; 8
+   20c9   00            	DB	00000000B	; <blank>
                         	
-   207b   60            	DB	01100000B	; i
-   207c   5b            	DB	01011011B	; s
-   207d   00            	DB	00000000B	; <blank>
-   207e   45            	DB	01000101B	; u
-   207f   67            	DB	01100111B	; p
-   2080   00            	DB	00000000B	; <blank>
-   2081   6f            	DB	01101111B	; a
-   2082   29            	DB	00101001B	; n
-   2083   3d            	DB	00111101B	; d
+   20ca   60            	DB	01100000B	; i
+   20cb   5b            	DB	01011011B	; s
+   20cc   00            	DB	00000000B	; <blank>
+   20cd   45            	DB	01000101B	; u
+   20ce   67            	DB	01100111B	; p
+   20cf   00            	DB	00000000B	; <blank>
+   20d0   6f            	DB	01101111B	; a
+   20d1   29            	DB	00101001B	; n
+   20d2   3d            	DB	00111101B	; d
                         	
-   2084   00            	DB	00000000B	; <blank>
-   2085   42            	DB	01000010B	; r
-   2086   45            	DB	01000101B	; u
-   2087   29            	DB	00101001B	; n
-   2088   29            	DB	00101001B	; n
-   2089   60            	DB	01100000B	; i
-   208a   29            	DB	00101001B	; n
-   208b   5f            	DB	01011111B	; g
-   208c   00            	DB	00000000B	; <blank>
+   20d3   00            	DB	00000000B	; <blank>
+   20d4   42            	DB	01000010B	; r
+   20d5   45            	DB	01000101B	; u
+   20d6   29            	DB	00101001B	; n
+   20d7   29            	DB	00101001B	; n
+   20d8   60            	DB	01100000B	; i
+   20d9   29            	DB	00101001B	; n
+   20da   5f            	DB	01011111B	; g
+   20db   00            	DB	00000000B	; <blank>
                         	
-   208d   61            	DB	01100001B
-   208e   01            	DB	00000001B
-   208f   0d            	DB	00001101B
-   2090   61            	DB	01100001B
-   2091   01            	DB	00000001B
-   2092   0d            	DB	00001101B
-   2093   61            	DB	01100001B
-   2094   01            	DB	00000001B
-   2095   0d            	DB	00001101B
+   20dc   61            	DB	01100001B
+   20dd   01            	DB	00000001B
+   20de   0d            	DB	00001101B
+   20df   61            	DB	01100001B
+   20e0   01            	DB	00000001B
+   20e1   0d            	DB	00001101B
+   20e2   61            	DB	01100001B
+   20e3   01            	DB	00000001B
+   20e4   0d            	DB	00001101B
                         	
    2040                 	END	DEMO
-2040  DEMO          204a  DEMO0         204f  DEMO1         2059  DEMO2     
-0053  DLY           200b  FPLEDS        2072  LEDPAT        2008  MFLAG     
-2045  START         
+2067  BLANK         206e  BLOOP         20ae  DELAY         2040  DEMO      
+204a  DEMO0         204f  DEMO1         2059  DEMO2         0053  DLY       
+20b4  DLY100        200b  FPLEDS        20b8  INNER         0000  IO.A      
+0001  IO.B          20c1  LEDPAT        2008  MFLAG         20b6  OUTER     
+00f0  PPI           2045  START         209c  TONE          
 

@@ -16,44 +16,44 @@
                         ;
                         ;	Org at 40K but we will store in ROM at 2000H
                         ;
-   a000                 	ORG	0A000H
+   2040                 	ORG	02040H
                         ;
                         ; Here's the classic LED demo code ...
                         ;
-   a000   3e 02         DEMO:	MVI	A,00000010B	; Disable LED updates
-   a002   32 08 20      	STA	MFLAG
+   2040   3e 02         DEMO:	MVI	A,00000010B	; Disable LED updates
+   2042   32 08 20      	STA	MFLAG
                         
-   a005   06 00         BEGIN:	MVI	B,0		; Initial pattern
+   2045   06 00         BEGIN:	MVI	B,0		; Initial pattern
                         
-   a007   21 0b 20      MLOOP:	LXI	H,FPLEDS	; Point to LED refresh RAM
-   a00a   0e 09         	MVI	C,9		; 9 LEDs to refresh
+   2047   21 0b 20      MLOOP:	LXI	H,FPLEDS	; Point to LED refresh RAM
+   204a   0e 09         	MVI	C,9		; 9 LEDs to refresh
                         
-   a00c   78            	MOV	A,B		; Grab current pattern
+   204c   78            	MOV	A,B		; Grab current pattern
                         ;
                         ;	copy the same pattern to all 9 LED positions
                         ;
-   a00d   77            LLOOP:	MOV	M,A		; Store in LED position
-   a00e   23            	INX	H		; Point to next LED position
-   a00f   0d            	DCR	C		; Count down
-   a010   c2 0d a0      	JNZ	LLOOP
+   204d   77            LLOOP:	MOV	M,A		; Store in LED position
+   204e   23            	INX	H		; Point to next LED position
+   204f   0d            	DCR	C		; Count down
+   2050   c2 4d 20      	JNZ	LLOOP
                         ;
                         ;	Delay a bit...
                         ;
-   a013   0e 01         	MVI	C,1		; Call .DLY once
-   a015   3e 32         DLOOP:	MVI	A,50
-   a017   cd 53 00      	CALL	DLY		; delay...
-   a01a   0d            	DCR	C		; Count down
-   a01b   c2 15 a0      	JNZ	DLOOP
+   2053   0e 01         	MVI	C,1		; Call .DLY once
+   2055   3e 32         DLOOP:	MVI	A,50
+   2057   cd 53 00      	CALL	DLY		; delay...
+   205a   0d            	DCR	C		; Count down
+   205b   c2 55 20      	JNZ	DLOOP
                         
-   a01e   05            	DCR	B		; Change the pattern
-   a01f   c2 07 a0      	JNZ	MLOOP		; Loop through all patterns
+   205e   05            	DCR	B		; Change the pattern
+   205f   c2 47 20      	JNZ	MLOOP		; Loop through all patterns
                         ;
                         ;	Have cycled through all 255 patterns, now repeat
                         ;
-   a022   c3 05 a0      	JMP	BEGIN		; Now start over!
+   2062   c3 45 20      	JMP	BEGIN		; Now start over!
                         
-   a000                 	END	DEMO
-a005  BEGIN         00f0  CTLPORT       a000  DEMO          a015  DLOOP     
-0053  DLY           200b  FPLEDS        a00d  LLOOP         2008  MFLAG     
-a007  MLOOP         
+   2040                 	END	DEMO
+2045  BEGIN         00f0  CTLPORT       2040  DEMO          2055  DLOOP     
+0053  DLY           200b  FPLEDS        204d  LLOOP         2008  MFLAG     
+2047  MLOOP         
 

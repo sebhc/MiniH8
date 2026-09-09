@@ -1,0 +1,38 @@
+                        ; TESTLEDS
+                        ;
+                        ; Simple program to light up all the LED segments. press
+                        ; any keypad key to exit
+                        ;
+                        ; Assembled with A85 for H8 Mini
+                        ;
+                        ; G. Roberts	September 2026
+                        ;
+                        
+   200b                 FPLEDS	EQU	200BH		; LED pattern storage location
+   2008                 MFLAG	EQU	2008H		; Front panel update flags
+                        
+   2040                 	ORG	2040H
+                        
+                        
+   2040   3e 02         TEST:	MVI	A,00000010B	; LED refresh only (no data update)
+   2042   32 08 20      	STA	MFLAG
+                        
+   2045   3e ff         	MVI	A,377Q		; all segments lit
+                        ;
+                        ;	copy pattern into all 9 locations
+                        ;
+   2047   21 0b 20      	LXI	H,FPLEDS	; Point to LED refresh RAM
+   204a   0e 09         	MVI	C,9		; 9 LEDs to refresh
+   204c   77            LOOP:	MOV	M,A		; Store in LED position
+   204d   23            	INX	H		; Point to next LED position
+   204e   0d            	DCR	C		; Count down
+   204f   c2 4c 20      	JNZ	LOOP
+                        ;
+                        ;	loop forever (RST/0 to restart)
+                        ;
+   2052   c3 52 20      WAIT:	JMP	WAIT
+                        
+   2040                 	END	TEST
+200b  FPLEDS        204c  LOOP          2008  MFLAG         2040  TEST      
+2052  WAIT          
+
