@@ -47,7 +47,8 @@ DISP:	DCR	C		; Move successive values of
 ;	Watch the clock and wait for it to be a multiple of 2
 ;	(bit 2 of the high byte on). As long as it is set
 ;	just continue to loop here. During this time the 
-;	LED patterns will not be updated.
+;	LED patterns will not be updated. This should amount
+;	to 1024 clock cycles or about 5 seconds.
 ;	
 WAIT2:	LXI	H,.TICCNT+1	; High byte of tick counter
 LOOP2:	MOV	A,M

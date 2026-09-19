@@ -1,0 +1,50 @@
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	Test the new RCK function in minipam8
+                        ;
+                        ;
+                        ;	GFR	9/14/2026
+                        ;
+                        
+                        
+                        ;
+                        ;	Monitor entry points and key values
+                        ;
+   0053                 DLY	EQU	0053H		; 2ms delay routine
+                        
+   04b3                 PRTHEX	EQU	04B3H		; print byte in A in hex
+   04c7                 PRTSPC	EQU	04C7H		; print a space
+   04d6                 PRTCLS	EQU	04D6H		; print CR/LF then string
+   04d9                 PRTSTR	EQU	04D9H		; print string
+   04cc                 CRLF	EQU	04CCH		; print CR/LF
+                        
+   064d                 RCK	EQU	064DH		; RCK (in minipam8)
+   0284                 HORN	EQU	0284H		; HORN (in minipam8)
+                        
+   2040                 	ORG	2040h		; ORG at 040.100
+                        	
+   2040   cd cc 04      START:	CALL	CRLF		; start on a new line
+                        ;
+                        ;	Assumes PPI has been initialized by the ROM
+                        ;
+                        ;
+                        ;	Loop calling RCK and printing result
+                        ;
+   2043   cd 4d 06      LOOP:	CALL	RCK		; read console keypad (blocking read)
+                        
+   2046   f5            	PUSH	PSW
+   2047   3e 14         	MVI	A,20		; 20 ms beep
+   2049   cd 84 02      	CALL	HORN
+   204c   f1            	POP	PSW
+                        	
+   204d   cd b3 04      	CALL	PRTHEX		; print the value
+   2050   cd cc 04      	CALL	CRLF		; new line
+                        	
+   2053   c3 43 20      	JMP	LOOP		; and loop forever...
+                        
+                        
+   2040                 	END	START
+04cc  CRLF          0053  DLY           0284  HORN          2043  LOOP      
+04d6  PRTCLS        04b3  PRTHEX        04c7  PRTSPC        04d9  PRTSTR    
+064d  RCK           2040  START         
+
