@@ -208,7 +208,6 @@ DBDLY	EQU	10
 BITTIME	EQU	0137H		;2400 BPS with 4.0 MHz crystal
 HALFBIT	EQU	011CH		;Half-bit time
 
-
 	INCLUDE	"u8251.asm"	; DEFINE THE 8251 USART BITS
 
 ;	INTERRUPT VECTORS.
@@ -227,12 +226,6 @@ INIT0	LXI	D,PRSROM	; (DE) = ROM COPY OF PRS CODE
 	JMP	INIT		; INITIALIZE
 ;	ERRPL	INIT-1000Q	; BYTE IN WORD 10A MUST BE 0
 
-	ORG	33Q
-;
-;	Legacy relic from PAM/8 - needs updating for H8 Mini if used
-;
-GO.     MVI     A,CB.SSI+CB.CLI+CB.SPK ; OFF MONITOR MODE LIGHT
-        JMP     SST1            ; RETURN TO USER PROGRAM
 
 
 ;	Interrupt 5.5 - caused by RTM/0 key combination
@@ -405,7 +398,7 @@ PPS	EQU	PPSROM+8000H	; where we will actually call it from
 ;	INIT is called whenever a hardware master-clear is initiated.
 ;
 ;	Setup PAM/8 control cells in RAM.
-;	Decode how much memory exists, setup stackpointer, amd
+;	Setup stackpointer, and
 ;	enter the monitor loop.
 ;
 ;	ENTRY:	from master clear
@@ -426,20 +419,19 @@ INIT	LDAX	D		; copying from *PRSROM* into RAM
 	LXI	H,TICCNT	; Tick counter
 	SHLD	ABUSS		; store it
 ;
-;	In PAM/8 the code determines the top of RAM by probing
+;	The original PAM/8 determined the top of RAM by probing
 ;	every 1K for live RAM and then set the stack pointer
 ;	there. For the H8 Mini we assume a 32K RAM space and
 ;	set SP there.
 ;
-	LXI	SP,STACK	; Stack at top of RAM
-	
-;	PUSH	H		; save *PC* value on stack
-;	LXI	H,ERROR		; ERROR = general bail out routine
-;	PUSH	H		; set as 'return address'
+	LXI	H,STACK		; Stack at top of RAM
+INIT2:	DCX	H		; set to one minus memory limit
+	SPHL			; set SP
+	PUSH	H		; save *PC* value on stack
+	LXI	H,ERROR		; ERROR = general bail out routine
+	PUSH	H		; set as 'return address'
 ;
-;	For testing purposes we now initialize key values and
-;	jump to GWMON console monitor
-
+;	H8 Mini-specific Initializations
 ;
 ;	Call the PPI setup code from its "shadow" location 8000H higher
 ;
@@ -450,14 +442,18 @@ INIT	LDAX	D		; copying from *PRSROM* into RAM
 	XRA	A		; clear serial I/O byte count
 	STA	NBYTES
 	MVI	A,00001001B	; enable RST 7.5 (clock) and RST 6.5 (serial)
-;	MVI	A,00001011B	; enable RST 7.5 (clock) only
 	SIM			; apply the mask
 	EI			; globally enable interrupts
+	
 ;
-;	Now just go to the GWMON command loop (later we'll add the
-;	front panel keypad code)
+;	Use GWMON as main loop while we debug things...
 ;
 	JMP	GWMON
+	
+;	JMP	SAVALL		; begin front panel monitor
+
+;	Now just fall through to SAVALL and then return to the
+;	general bailout routine ERROR.
 
 ;
 ;	SAVALL - save all registers on stack.
@@ -727,7 +723,7 @@ PCKX	EQU	*
 ;
 ;	Exit clock interrupt
 ;
-;	For testing purposes simply exit here. Code that follows is to handle
+;	For now simply exit here. Code that follows is to handle
 ;	processing of HLT instructions
 ;
 	JMP	INTXIT
@@ -762,11 +758,11 @@ PCKX	EQU	*
 ;	 CPI	 56Q		 ; SEE IF '0' AND '#'
 ;	 JNZ	 CUI1		 ; IF NOT, ALLOW USER PROCESSING OF CLOCK
 
-;	ERROR - COMMAND ERROR.
+;	ERROR - Command error or general bail out
 ;
-;	ERROR IS CALLED AS A 'BAIL-OUT' ROUTINE.
+;	Error is called as a 'bail-out' routine.
 ;
-;	IT RESETS THE OPERATIONAL MODE, AND RESTORES THE STACKPOINTER.
+;	It resets the operational mode, and restores the stackpointer.
 ;
 ;	ENTRY	NONE
 ;	EXIT	TO MTR LOOP
@@ -776,195 +772,197 @@ PCKX	EQU	*
 
 ERROR:	LXI	H,MFLAG
 	MOV	A,M		; (A) = MFLAG
-	ANI	377Q-UO.DDU-UO.NFR ; RE-ENABLE DISPLAYS
-	MOV	M,A		; REPLACE
+	ANI	377Q-UO.DDU-UO.NFR ; Re-enable displays
+	MOV	M,A		; replace
 	INX	H		; next point to CTLFLG
-	MVI	M,CB.SSI+CB.MTL+CB.CLI+CB.SPK ; RESTORE *CTLFLG*
+	MVI	M,CB.SSI+CB.MTL+CB.CLI+CB.SPK ; Restore *CTLFLG*
 ;	ERRNZ	CTLFLG-MFLAG-1	; code assumes CTLFLG follows MFLAG
 	EI
 	LHLD	REGPTR
-	SPHL			; RESTORE STACK POINTER TO EMPTY STATE
-	CALL	ALARM		; ALARM FOR 200 MS
+	SPHL			; Restore stack pointer to empty state
+	CALL	ALARM		; Alarm for 200 ms
+;	JMP	MTR
 
-;	MTR - MONITOR LOOP.
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 ;
-;	THIS IS THE MAIN EXECUTIVE LOOP FOR THE FRONT PANEL EMULATOR.
+;	MTR - Monitor Loop.
+;
+;	This is the main executive loop for the front panel emulator.
+;
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+MTR:	EI
 
-MTR	EI
-
-MTR1	LXI	H,MTR1
-	PUSH	H		; SET 'MTR1' AS RETURN ADDRESS
+MTR1:	LXI	H,MTR1		; set top of the monitor loop
+	PUSH	H		; as return address
 	LXI	B,DSPMOD	; (BC) = #DSPMOD
-	LDAX	B
-	ANI	1		; (A) = 1 IF ALTER
-	CMA
-	STA	DSPROT		; ROTATE LED PERIODS IF ALTER
-
-;	READ KEY
-
-	CALL	RCK		; READ CONSOLE KEYPAD
-	LHLD	ABUSS
-	CPI	10
-	JNC	MTR4		; IF IN 'ALWAYS VALID' GROUP
-	MOV	E,A		; SAVE VALUE
-;	SET	DSPMOD
 	LDAX	B		; (A) = DSPMOD
-	RRC
-	JC	MTR5		; IF IN ALTER MODE
-	MOV	A,E		; (A) = CODE
-
-;	HAVE A COMMAND (NOT A VALUE)
-
-MTR4	SUI	4		; (A) = COMMAND
-	JC	ERROR		; IF BAD
-	MOV	E,A
-	PUSH	H		; SAVE ABUSS VALUE
-	LXI	H,MTRA
-	MVI	D,0
-	DAD	D		; (H,L) = ADDRESS OF TABLE ENTRY
-	MOV	E,M
-	DAD	D		; (H,L) = ADDRESS OF PROCESSOR
-	XTHL			; SET ADDRESS, (H,L) = (ABUSS)
-	LXI	D,REGI		; (D,E) = ADDRESS OF REG INDEX
-;	SET	DSPMOD
-	LDAX	B		; (A) = DSPMOD
-	ANI	2		; SET 'Z' IF MEMORY
-	LDAX	B		; (A) = DSPMOD
-	RET			; JUMP TO PROCESSOR
-
-MTRA				; JUMP TABLE
-	DB	GO-$		; 4 - GO
-	DB	IN- $		; 5 - INPUT
-	DB	OUT-$		; 6 - OUTPUT
-	DB	SSTEP-$		; 7 - SINGLE STEP
-	DB	RMEM-$		; 8 - CASSETTE LOAD
-	DB	WMEM-$		; 9 - CASSETTE DUMP
-	DB	NEXT-$		; + - NEXT
-	DB	LAST-$		; - - LAST
-	DB	ABORT-$		; * - ABORT
-	DB	RW-$		; / - DISPLAY/ALTER
-	DB	MEMM-$		; # - MEMORY MODE
-	DB	REGM-$		; . - REGISTER MODE
-
-;	PROCESS MEMORY/REGISTER ALTERATIONS.
+	ANI	1		; (A) = 1 if in alter mode
+;	CMA			; H8 Mini uses opposite sense - gfr
+	STA	DSPROT		; rotate LED periods if alter
 ;
-;	THIS CODE IS ENTERED IF
+;	Read a key from the keypad and take appropriate action
 ;
-;	1) AM IN ALTER MODE, AND
-;	2) A KEY FROM 0-7 WAS ENTERED.
+	CALL	RCK		; read console keypad
+	LHLD	ABUSS		; (HL) = ABUSS
+	CPI	10		; test for [0..9]
+	JNC	MTR4		; everything else is "always valid"
+	MOV	E,A		; save RCK result
+	LDAX	B		; (A) = DSPMOD
+	RRC			; move low bit to CY
+	JC	MTR5		; if in alter mode
+	MOV	A,E		; (A) = code
+;
+;	"Always Valid": have a command (not a value)
+;
+MTR4	SUI	4		; Offset so "Go" is zero
+	JC	ERROR		; if bad
+	MOV	E,A		; save it
+	PUSH	H		; save ABUSS value
+	LXI	H,MTRA		; point to dispatch table
+	MVI	D,0		; (DE) = offset
+	DAD	D		; (HL) = address of table entry
+	MOV	E,M		; (DE) = offset to processor
+	DAD	D		; (HL) = address of processor
+;
+;	Prepare to dispatch to processor. Put dispatch address on the
+;	stack (RET will jump there), point DE to REG Index, set
+;	'Z' if memory and load A with DSPMOD
+;
+	XTHL			; set address, (HL) = (ABUSS)
+	LXI	D,REGI		; (DE) = address of reg index
+	LDAX	B		; (A) = DSPMOD
+	ANI	2		; set 'Z' if memory
+	LDAX	B		; (A) = DSPMOD
+	RET			; jump to processor
+;
+;	Command dispatch table (NOTE single byte offsets so
+;	it is important that the dispatch routine not be farther away than
+;	256 bytes)
+;
+MTRA:	DB	GO-$		; 4 - go
+	DB	IN- $		; 5 - input
+	DB	OUT-$		; 6 - output
+	DB	SSTEP-$		; 7 - single step
+	DB	ABORT-$		; 8 - cassette load (N/A)
+	DB	ABORT-$		; 9 - cassette dump (N/A)
+	DB	NEXT-$		; + - next
+	DB	LAST-$		; - - last
+	DB	ABORT-$		; * - abort
+	DB	RW-$		; / - display/alter
+	DB	MEMM-$		; # - memory mode
+	DB	REGM-$		; . - register mode
+
+;	Process memory/register alterations.
+;
+;	This code is entered if
+;
+;	1) we are in alter mode, and
+;	2) a key from 0-7 was entered.
 
 MTR5	RRC
-	MOV	A,E		; (A) = VALUE
-	JC	MTR6		; IS REGISTER
-	STC			; INDICATE 1ST DIGIT IS IN (A)
-	CALL	IOB		; INPUT OCTAL BYTE
-	INX	H		; DISPLAY NEXT LOCATION
+	MOV	A,E		; (A) = U
+	JC	MTR6		; is register
+	STC			; indicate 1st digit is in (A)
+	CALL	IOB		; input octal byte
+	INX	H		; display next location
 
-;	SAE - STORE ABUSS AND EXIT.
+;	SAE - Store ABUSS and exit.
 ;
-;	ENTRY	(HL) = ABUSS VALUE
-;	EXIT	TO (RET)
-;	USES	NONE
-
+;	ENTRY:	(HL) = ABUSS value
+;	EXIT:	to (RET)
+;	USES:	NONE
+;
 SAE	SHLD	ABUSS
 	RET
-
-;	ALTER REGISTER
-
-MTR6	PUSH	PSW		; SAVE CODE
-	CALL	LRA		; LOCATE REGISTER ADDRESS
-	ANA	A
-	JZ	ERROR		; NOT ALLOWED TO ALTER STACKPOINTER
-	INX	H
-	POP	PSW		; RESTORE VALUE AND CARRY FLAG
-	JMP	IOA		; INPUT OCTAL ADDRESS
-
-
-;	REGM - ENTER REGISTER DISPLAY MODE.
 ;
-;	ENTRY	(A) = DSPMOD
+;	alter register
+;
+MTR6	PUSH	PSW		; save code
+	CALL	LRA		; locate register address
+	ANA	A
+	JZ	ERROR		; not allowed to alter stackpointer
+	INX	H
+	POP	PSW		; restore value and carry flag
+	JMP	IOA		; input octal address
+;
+;	REGM - enter register display mode.
+;
+;	ENTRY:	(A) = DSPMOD
 ;		(BC) = #DSPMOD
-
+;
 REGM	MVI	A,00000010B	; Set dispolay to register mode
-;	SET	DSPMOD
-	STAX	B		; SET DISPLAY REGISTER MODE
+	STAX	B		; set display register mode
 ;	ERRNZ	DSPMOD-DSPROT-1	; code assumesDSPMOD follows DSPROT
 	DCX	B		; (BC) = #DSPROT
 	XRA	A
 	CMA			; H8 Mini uses '1' for LED segment on - gfr
-	STAX	B		; SET ALL PERIODS ON
-	CALL	RCK		; READ KEY ENTRY
-	DCR	A		; DISPLACE
+	STAX	B		; set all periods on
+	CALL	RCK		; read key entry
+	DCR	A		; displace
 	CPI	6
-	JNC	ERROR		; NOT 1-6
+	JNC	ERROR		; not 1-6
 	RLC
-	STAX	D		; SET NEW REG IND
-;	SET	REGI
+	STAX	D		; set new reg ind
 	RET
 
-;	RW - TOGGLE DISPLAY/ALTER MODE.
+;	RW - toggle display/alter mode.
 ;
 ;	ENTRY	(A) = DSPMOD
 ;		(BC) = ADDRESS OF DSPMOD
 
-;	SET	DSPMOD
 RW	XRI	1
 	STAX	B
 	RET
 
-;	NEXT - INCREMENT DISPLAY ELEMENT
+;	NEXT - Increment display element
 ;
 ;	ENTRY	(HL) = (ABUSS)
-;		(DE) = ADDRESS OF REGIND
-
+;		(DE) = address of REGIND
+;
 NEXT	INX	H
-	JZ	SAE		; IF MEMORY, STORE VALUES AND EXIT
-
-;	IS REGISTER MODE.
-
-;	SET	REGI
+	JZ	SAE		; if memory, store values and exit
+;
+;	Is register mode.
+;
 	LDAX	D		; (A) = REGI
-	ADI	2		; INCREMENT REGISTER INDEX
-	STAX	D		; WRAP TO *SP*
+	ADI	2		; increment register index
+	STAX	D		; wrap to *SP*
 	CPI	12
-	RC			; IF NOT TOO LARGE, EXIT
-	XRA	A		; OVERFLOW
+	RC			; if not too large, exit
+	XRA	A		; overflow
 	STAX	D
 ABORT	RET
 
-;	LAST - INCREMENT DISPLAY ELEMENT
+;	LAST - Increment display element
 ;
 ;	ENTRY	(HL) = (ABUSS)
-;		(DE) = ADDRESS OF REGIND
+;		(DE) = address of REGIND
 ;
-
 LAST	DCX	H
-	JZ	SAE		; IF MEMORY, STORE AND EXIT
-
-;	IS REGISTER MODE
-
-;	SET	REGI
+	JZ	SAE		; if memory, store and exit
+;
+;	Is register mode
+;
 LST2	LDAX	D		; (A) = REGI
 	SUI	2
 	STAX	D
-	RNC			; IF OK
-	MVI	A,10		; UNDERFLOW TO *PC*
+	RNC			; If OK
+	MVI	A,10		; Underflow to *PC*
 	STAX	D
 	RET
-
-;	MEMM - ENTER DISPLAY MEMORY MODE
 ;
-;	ENTRY	(BC) = ADDRESS OF DSPMOD
-
+;	MEMM - Enter display memory mode
+;
+;	ENTRY	(BC) = Address of DSPMOD
+;
 MEMM	XRA	A		; (A) = 0
-;	SET	DSPMOD
-	STAX	B		; SET DISPLAY MEMORY MODE
+	STAX	B		; set display memory mode
 ;	ERRNZ	DSPMOD-DSPROT-1	; code assumes DSPMOD follows DSPROT
 	DCX	B		; (BC) = #DSPROT
 	CMA			; H8 Mini uses '1' for 
-	STAX	B		; SET ALL PERIODS ON
+	STAX	B		; set all periods on
 	LXI	H,ABUSS+1
-	JMP	IOA		; INPUT OCTAL ADDRESS
+	JMP	IOA		; input octal address
 
 ;	IN - Input a data byte
 ;
@@ -988,118 +986,37 @@ OUT	MVI	B,MI.OUT	; store the OUT instruction in RAM
 	MOV	L,H		; (L) = port
 	MOV	H,A		; (H) = value
 	JMP	SAE		; store ABUSS and exit
-
-;	GO - RETURN TO USER MODE
+;
+;	GO - return to user mode
 ;
 ;	ENTRY	NONE
 
-GO	JMP	GO.		; ROUTINE IS IN WASTE SPACE
+GO	MVI     A,CB.SSI+CB.CLI+CB.SPK ; off monitor mode light
+        JMP     SST1            ; return to user program
+
 
 ;	SSTEP - SINGLE STEP INSTRUCTION
 ;
 ;	ENTRY	NONE
 
-SSTEP				; SINGLE STEP
-	DI			; DISABLE INTERRUPTS UNTIL THE RIGHT TIME
+SSTEP:	DI			; disable interrupts until the right time
 	LDA	CTLFLG
-	XRI	CB.SSI		; CLEAR SINGLE STEP INHIBIT
-	OUT	OP.CTL		; PRIME SINGLE STEP INTERRUPT
-SST1	STA	CTLFLG		; SET NEW FLAG VALUES
-	POP	H		; CLEAN STACK
-	JMP	INTXIT		; RETURN TO USER ROUTINE FOR STEP
+	XRI	CB.SSI		; clear single step inhibit
+	OUT	OP.CTL		; prime single step interrupt
 
-;	STPRTN - SINGLE STEP RETURN
-
-STPRTN
-	ORI	CB.SSI		; DISABLE SINGLE STEP INTERRUPTION
-	OUT	OP.CTL		; TURN OFF SINGLE STEP ENABLE
-;	SET	CTLFLG
+SST1	STA	CTLFLG		; set new flag values
+	POP	H		; clean stack
+	JMP	INTXIT		; return to user routine for step
+;
+;	STPRTN - Single step return
+;
+STPRTN:	ORI	CB.SSI		; disable single step interruption
+	OUT	OP.CTL		; turn off single step enable
 	STAX	D
-	ANI	CB.MTL		; SEE IF IN MONITOR MODE
+	ANI	CB.MTL		; see if in monitor mode
 	JNZ	MTR
-	JMP	UIVEC+3		; TRANSFER TO USER'S ROUTINE
-
-;	RMEM - LOAD MEMORY FROM TAPE
+	JMP	UIVEC+3		; transfer to user's routine
 ;
-
-RMEM	LXI	H,TPABT
-	SHLD	TPERRX		; SETUP ERROR EXIT ADDRESS
-	JMP	LOAD
-
-
-;	DUMP - DUMP MEMORY TO MAG TAPE.
-;
-;	DUMP SPECIFIED MEMORY RANGE TO MAG TAPE.
-;
-;	ENTRY	(START) = START ADDRESS
-;		(ABUSS) = END ADDRESS
-;		USER PC = ENTRY POINT ADDRESS
-;	EXIT	TO CALLER.
-
-WMEM	LXI	H,TPABT
-	SHLD	TPERRX		; TAPE ERROR EXIT
-
-DUMP	MVI	A,UCI.TE
-	OUT	OP.TPC		; SETUP TAPE CONTROL
-	MVI	A,A.SYN
-	MVI	H,32		; (H) = # OF SYNC CHARACTERS
-WME1	CALL	WNB
-	DCR	H
-	JNZ	WME1		; WRITE SYN HEADER
-	MVI	A,A.STX
-	CALL	WNB		; WRITE STX
-	MOV	L,H		; (HL) = 00
-	SHLD	CRCSUM		; CLEAR CRC 16
-	LXI	H,100401Q	; RT.MI+80H*256+1 FIRST AND LAST MI RECORD
-	CALL	WNP
-	LHLD	START
-	XCHG			; (D,E) = START ADDRESS
-	LHLD	ABUSS		; (H,L) = STOP ADDR
-	INX	H		; COMPUTE WITH STOP+1
-	MOV	A,L
-	SUB	E
-	MOV	L,A
-	MOV	A,H
-	SBB	D
-	MOV	H,A		; (HL) = COUNT
-	CALL	WNP		; WRITE COUNT
-	PUSH	H
-	MVI	A,10
-	PUSH	D		; SAVE (DE)
-	CALL	LRA.		; LOCATE P-REG ADDRESS
-	MOV	A,M
-	INX	H
-	MOV	H,M
-	MOV	L,A		; (HL) = CONTENTS OF PC
-	CALL	WNP		; WRITE HEADER
-	POP	H		; (HL) = ADDRESS
-	POP	D		; (DE) = COUNT
-	CALL	WNP
-
-WME2	MOV	A,M
-	CALL	WNB		; WRITE BYTE
-	SHLD	ABUSS		; SET ADDRESS FOR DISPLAY
-	INX	H
-	DCX	D
-	MOV	A,D
-	ORA	E
-	JNZ	WME2		; IF MORE TO GO
-
-;	WRITE CHECKSUM
-
-	LHLD	CRCSUM
-	CALL	WNP		; WRITE IT
-	CALL	WNP		; FLUSH CHECKSUM
-;	JMP	TFT
-
-;	TFT - TURN OFF TAPE.
-;
-;	STOP THE TAPE TRANSPORT.
-;
-
-TFT	XRA	A
-	OUT	OP.TPC		; TURN OFF TAPE
-
 ;	HORN - make noise
 ;
 ;	This routine works completely differently than the PAM/8
@@ -1153,176 +1070,6 @@ HDLY2:	NOP			; 4 T-states
 	POP	B
 	RET
 
-;	CTC - VERIFY CHECKSUM.
-;
-;	ENTRY	TAPE JUST BEFORE CRC
-;	EXIT	TO CALLER IF OK
-;		TO *TPERR* IF BAD
-;	USES	A,F,H,L
-
-CTC	CALL	RNP		; READ NEXT PAIR
-	LHLD	CRCSUM
-	MOV	A,H
-	ORA	L
-	RZ			; RETURN IF OK
-	MVI	A,1		; CHECKSUM ERROR
-;	JMP	TPERR		; (B) = CODE
-
-;	TPERR - PROCESS TAPE ERROR.
-;
-;	DISPLAY ERR NUMBER IN LOW BYTE OF ABUSS
-;
-;	IF ERROR NUMBER EVEN, DON'T ALLOW #
-;	IF ERROR NUMBER ODD, ALLOW #
-;
-;	ENTRY	(A) = NUMBER
-
-TPERR	STA	ABUSS
-	MOV	B,A		; (B) = CODE
-	CALL	TFT		; TURN OFF TAPE
-
-;	IS #, RETURN (IF PARITY ERROR)
-
-	DB	MI.ANI		; FALL THROUGH WITH CARRY CLEAR
-TER3	MOV	A,B
-
-	RRC
-	RC			; RETURN IF OK
-
-;	BEEP AND FLASH ERROR NUMBER
-
-TER1	CC	ALARM		; ALARM IF PROPER TIME
-	CALL	TPXIT		; SEE IF #
-	IN	IP.PAD
-	CPI	00101111B	; CHECK FOR #
-	JZ	TER3		; IF #
-	LDA	TICCNT+1
-	RAR			; 'C' SET IF 1/2 SECOND
-	JMP	TER1
-
-;	TPABT - ABORT TAPE LOAD OR DUMP.
-;
-;	ENTERED WHEN LOADING OR DUMPING, AND THE '*' KEY
-;	IS STRUCK.
-
-TPABT	XRA	A
-	OUT	OP.TPC		; OFF TAPE
-	JMP	ERROR
-
-;	TPXIT - CHECK FOR USER FORCED EDIT.
-;
-;	TPXIT CHECKS FOR AN `*` KEYPAD ENTRY. IF SO, TAKE
-;	THE TAPE DRIVER ABNORMAL EXIT.
-;
-;	ENTRY	NONE
-;	EXIT	TO *RET* IF NOT '*'
-;		(A) = PORT STATUS
-;		TO (TPERRX) IF '*' DOWN
-;	USES	A,F
-
-TPXIT	IN	IP.PAD
-	CPI	01101111B	; *
-	IN	IP.TPC		; READ TAPE STATUS
-	RNZ			; NOT '*', RETURN WITH STATUS
-	LHLD	TPERRX
-	PCHL			; ENTER (TPERRX)
-
-;	SRS - SCAN RECORD START
-;
-;	SRS READS BYTES UNTIL IT RECOGNIZES THE START OF A RECORD.
-;
-;	THIS REQUIRES
-;	AT LEAST 10 SYNC CHARACTERS
-;	1 STX CHARACTER
-;
-;	THE CRC-16 IS THEN INITIALIZED.
-;
-;	ENTRY	NONE
-;	EXIT	TAPE POSITIONED (AND MOVING), CRCSUM=0
-;		(DE) = HEADER BYTES
-;		(HL) = RECORD COUNT
-;	USES	A,F,D,E,H,L
-
-SRS
-SRS1	MVI	D,0
-	MOV	H,D
-	MOV	L,D		; (HL) = 0
-SRS2	CALL	RNB		; READ NEXT BYTE
-	INR	D
-	CPI	A.SYN
-	JZ	SRS2		; HAVE SYN
-	CPI	A.STX
-	JNZ	SRS1		; NOT STX - START OVER
-
-	MVI	A,10
-	CMP	D		; SEE IF ENOUGH SYNC CHARACTERS
-	JNC	SRS1		; NOT ENOUGH
-	SHLD	CRCSUM		; CLEAR CRC-16
-	CALL	RNP		; READ LEADER
-	MOV	D,H
-	MOV	E,A
-;	JMP	RNP		; READ COUNT
-
-;	RNP - READ NEXT PAIR.
-;
-;	RNP READS THE NEXT TWO BYTES FROM THE INPUT DEVICE.
-;
-;	ENTRY	NONE
-;	EXIT	(H,A) = BYTE PAIR
-;	USES	A,F,H
-
-RNP	CALL	RNB		; READ NEXT BYTE
-	MOV	H,A
-;	JMP	RNB		; READ NEXT BYTE
-
-;	RNB - READ NEXT BYTE
-;
-;	RNB READS THE NEXT SINGLE BYTE FROM THE INPUT DEVICE.
-;	THE CHECKSUM IS TAKEN FOR THE CHARACTER.
-;
-;	ENTRY	NONE
-;	EXIT	(A) = CHARACTER
-;	USES	A,F
-
-RNB	MVI	A,UCI.RO+UCI.ER+UCI.RE ; TURN ON READER FOR NEXT BYTE
-	OUT	OP.TPC
-RNB1	CALL	TPXIT		; CHECK FOR *, READ STATUS
-	ANI	USR.RXR
-	JZ	RNB1		; IF NOT READY
-	IN	IP.TPD		; INPUT DATA
-;	JMP	CRC		; CHECKSUM
-
-
-;	WNP - WRITE NEXT PAIR
-;
-;	WNP WRITE THE NEXT TWO BYTES TO THE CASSETTE DRIVE.
-;
-;	ENTRY	(H,L) = BYTES
-;	EXIT	WRITTEN.
-;	USES	A,F
-
-WNP	MOV	A,H
-	CALL	WNB
-	MOV	A,L
-;	JMP	WNB		; WRITE NEXT BYTE
-
-;	WNB - WRITE NEXT BYTE
-;
-;	WNB WRITE THE NEXT BYTE TO THE CASSETTE TAPE.
-;
-;	ENTRY	(A) = BYTE
-;	EXIT	NONE.
-;	USES	F
-
-WNB	PUSH	PSW
-WNB1	CALL	TPXIT		; CHECK FOR #, READ STATUS
-	ANI	USR.TXR
-	JZ	WNB1		; IF MORE TO GO
-	MVI	A,UCI.ER+UCI.TE ; ENABLE TRANSMITTER
-	OUT	OP.TPC		; TURN ON TAPE
-	POP	PSW
-	OUT	OP.TPD		; OUTPUT DATA
-	JMP	CRC		; COMPUTE CRC
 
 ;	LRA - LOCATE REGISTER ADDRESS
 ;
@@ -2337,7 +2084,12 @@ DODA:	DB	7EH		; 0
 	DB	0EH		; 7
 	DB	7FH		; 8
 	DB	5FH		; 9
-	
+
+; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+;	Tape routines from PAM/8 - these are specific to the H8 hardware
+;	and need to be either removed or rewritten 
+;	
 ;
 ;	CRC - COMPUTE CRC-16
 ;
@@ -2385,6 +2137,13 @@ CRC2	MOV	A,C
 	POP	H		; RESTORE (HL)
 	POP	B		; RESTORE (BC)
 	RET			; EXIT
+
+;	RMEM - LOAD MEMORY FROM TAPE
+;
+
+RMEM	LXI	H,TPABT
+	SHLD	TPERRX		; SETUP ERROR EXIT ADDRESS
+	JMP	LOAD
 
 ;	LOAD - LOAD MEMORY FROM TAPE
 ;
@@ -2442,14 +2201,265 @@ LOA1	CALL	RNB		; READ BYTE
 	RLC
 	JC	TFT		; ALL DONE - TURN OFF TAPE
 	JMP	LOA0		; READ ANOTHER RECORD
+;	DUMP - DUMP MEMORY TO MAG TAPE.
+;
+;	DUMP SPECIFIED MEMORY RANGE TO MAG TAPE.
+;
+;	ENTRY	(START) = START ADDRESS
+;		(ABUSS) = END ADDRESS
+;		USER PC = ENTRY POINT ADDRESS
+;	EXIT	TO CALLER.
+
+WMEM	LXI	H,TPABT
+	SHLD	TPERRX		; TAPE ERROR EXIT
+
+DUMP	MVI	A,UCI.TE
+	OUT	OP.TPC		; SETUP TAPE CONTROL
+	MVI	A,A.SYN
+	MVI	H,32		; (H) = # OF SYNC CHARACTERS
+WME1	CALL	WNB
+	DCR	H
+	JNZ	WME1		; WRITE SYN HEADER
+	MVI	A,A.STX
+	CALL	WNB		; WRITE STX
+	MOV	L,H		; (HL) = 00
+	SHLD	CRCSUM		; CLEAR CRC 16
+	LXI	H,100401Q	; RT.MI+80H*256+1 FIRST AND LAST MI RECORD
+	CALL	WNP
+	LHLD	START
+	XCHG			; (D,E) = START ADDRESS
+	LHLD	ABUSS		; (H,L) = STOP ADDR
+	INX	H		; COMPUTE WITH STOP+1
+	MOV	A,L
+	SUB	E
+	MOV	L,A
+	MOV	A,H
+	SBB	D
+	MOV	H,A		; (HL) = COUNT
+	CALL	WNP		; WRITE COUNT
+	PUSH	H
+	MVI	A,10
+	PUSH	D		; SAVE (DE)
+	CALL	LRA.		; LOCATE P-REG ADDRESS
+	MOV	A,M
+	INX	H
+	MOV	H,M
+	MOV	L,A		; (HL) = CONTENTS OF PC
+	CALL	WNP		; WRITE HEADER
+	POP	H		; (HL) = ADDRESS
+	POP	D		; (DE) = COUNT
+	CALL	WNP
+
+WME2	MOV	A,M
+	CALL	WNB		; WRITE BYTE
+	SHLD	ABUSS		; SET ADDRESS FOR DISPLAY
+	INX	H
+	DCX	D
+	MOV	A,D
+	ORA	E
+	JNZ	WME2		; IF MORE TO GO
+
+;	WRITE CHECKSUM
+
+	LHLD	CRCSUM
+	CALL	WNP		; WRITE IT
+	CALL	WNP		; FLUSH CHECKSUM
+;	JMP	TFT
+
+;	TFT - TURN OFF TAPE.
+;
+;	STOP THE TAPE TRANSPORT.
+;
+
+TFT	XRA	A
+	OUT	OP.TPC		; TURN OFF TAPE
+
+;	CTC - VERIFY CHECKSUM.
+;
+;	ENTRY	TAPE JUST BEFORE CRC
+;	EXIT	TO CALLER IF OK
+;		TO *TPERR* IF BAD
+;	USES	A,F,H,L
+
+CTC	CALL	RNP		; READ NEXT PAIR
+	LHLD	CRCSUM
+	MOV	A,H
+	ORA	L
+	RZ			; RETURN IF OK
+	MVI	A,1		; CHECKSUM ERROR
+;	JMP	TPERR		; (B) = CODE
+
+;	TPERR - PROCESS TAPE ERROR.
+;
+;	DISPLAY ERR NUMBER IN LOW BYTE OF ABUSS
+;
+;	IF ERROR NUMBER EVEN, DON'T ALLOW #
+;	IF ERROR NUMBER ODD, ALLOW #
+;
+;	ENTRY	(A) = NUMBER
+
+TPERR	STA	ABUSS
+	MOV	B,A		; (B) = CODE
+	CALL	TFT		; TURN OFF TAPE
+
+;	IS #, RETURN (IF PARITY ERROR)
+
+	DB	MI.ANI		; FALL THROUGH WITH CARRY CLEAR
+TER3	MOV	A,B
+
+	RRC
+	RC			; RETURN IF OK
+
+;	BEEP AND FLASH ERROR NUMBER
+
+TER1	CC	ALARM		; ALARM IF PROPER TIME
+	CALL	TPXIT		; SEE IF #
+	IN	IP.PAD
+	CPI	00101111B	; CHECK FOR #
+	JZ	TER3		; IF #
+	LDA	TICCNT+1
+	RAR			; 'C' SET IF 1/2 SECOND
+	JMP	TER1
+
+;	TPABT - ABORT TAPE LOAD OR DUMP.
+;
+;	ENTERED WHEN LOADING OR DUMPING, AND THE '*' KEY
+;	IS STRUCK.
+
+TPABT	XRA	A
+	OUT	OP.TPC		; OFF TAPE
+	JMP	ERROR
+
+;	TPXIT - CHECK FOR USER FORCED EDIT.
+;
+;	TPXIT CHECKS FOR AN `*` KEYPAD ENTRY. IF SO, TAKE
+;	THE TAPE DRIVER ABNORMAL EXIT.
+;
+;	ENTRY	NONE
+;	EXIT	TO *RET* IF NOT '*'
+;		(A) = PORT STATUS
+;		TO (TPERRX) IF '*' DOWN
+;	USES	A,F
+
+TPXIT	IN	IP.PAD
+	CPI	01101111B	; *
+	IN	IP.TPC		; READ TAPE STATUS
+	RNZ			; NOT '*', RETURN WITH STATUS
+	LHLD	TPERRX
+	PCHL			; ENTER (TPERRX)
+
+;	SRS - SCAN RECORD START
+;
+;	SRS READS BYTES UNTIL IT RECOGNIZES THE START OF A RECORD.
+;
+;	THIS REQUIRES
+;	AT LEAST 10 SYNC CHARACTERS
+;	1 STX CHARACTER
+;
+;	THE CRC-16 IS THEN INITIALIZED.
+;
+;	ENTRY	NONE
+;	EXIT	TAPE POSITIONED (AND MOVING), CRCSUM=0
+;		(DE) = HEADER BYTES
+;		(HL) = RECORD COUNT
+;	USES	A,F,D,E,H,L
+
+SRS
+SRS1	MVI	D,0
+	MOV	H,D
+	MOV	L,D		; (HL) = 0
+SRS2	CALL	RNB		; READ NEXT BYTE
+	INR	D
+	CPI	A.SYN
+	JZ	SRS2		; HAVE SYN
+	CPI	A.STX
+	JNZ	SRS1		; NOT STX - START OVER
+
+	MVI	A,10
+	CMP	D		; SEE IF ENOUGH SYNC CHARACTERS
+	JNC	SRS1		; NOT ENOUGH
+	SHLD	CRCSUM		; CLEAR CRC-16
+	CALL	RNP		; READ LEADER
+	MOV	D,H
+	MOV	E,A
+;	JMP	RNP		; READ COUNT
+
+;	RNP - READ NEXT PAIR.
+;
+;	RNP READS THE NEXT TWO BYTES FROM THE INPUT DEVICE.
+;
+;	ENTRY	NONE
+;	EXIT	(H,A) = BYTE PAIR
+;	USES	A,F,H
+
+RNP	CALL	RNB		; READ NEXT BYTE
+	MOV	H,A
+;	JMP	RNB		; READ NEXT BYTE
+
+;	RNB - READ NEXT BYTE
+;
+;	RNB READS THE NEXT SINGLE BYTE FROM THE INPUT DEVICE.
+;	THE CHECKSUM IS TAKEN FOR THE CHARACTER.
+;
+;	ENTRY	NONE
+;	EXIT	(A) = CHARACTER
+;	USES	A,F
+
+RNB	MVI	A,UCI.RO+UCI.ER+UCI.RE ; TURN ON READER FOR NEXT BYTE
+	OUT	OP.TPC
+RNB1	CALL	TPXIT		; CHECK FOR *, READ STATUS
+	ANI	USR.RXR
+	JZ	RNB1		; IF NOT READY
+	IN	IP.TPD		; INPUT DATA
+;	JMP	CRC		; CHECKSUM
+
+
+;	WNP - WRITE NEXT PAIR
+;
+;	WNP WRITE THE NEXT TWO BYTES TO THE CASSETTE DRIVE.
+;
+;	ENTRY	(H,L) = BYTES
+;	EXIT	WRITTEN.
+;	USES	A,F
+
+WNP	MOV	A,H
+	CALL	WNB
+	MOV	A,L
+;	JMP	WNB		; WRITE NEXT BYTE
+
+;	WNB - WRITE NEXT BYTE
+;
+;	WNB WRITE THE NEXT BYTE TO THE CASSETTE TAPE.
+;
+;	ENTRY	(A) = BYTE
+;	EXIT	NONE.
+;	USES	F
+
+WNB	PUSH	PSW
+WNB1	CALL	TPXIT		; CHECK FOR #, READ STATUS
+	ANI	USR.TXR
+	JZ	WNB1		; IF MORE TO GO
+	MVI	A,UCI.ER+UCI.TE ; ENABLE TRANSMITTER
+	OUT	OP.TPC		; TURN ON TAPE
+	POP	PSW
+	OUT	OP.TPD		; OUTPUT DATA
+	JMP	CRC		; COMPUTE CRC
+
+
+
+;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+;
+;	RAM storage
+;
+;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+
+	ORG	2000H	; 8192 = beginning of RAM
 
 ;
 ;	PAM-8 uses the first 64 bytes of RAM for working space
 ;
 ;	THE FOLLOWING ARE CONTROL CELLS AND FLAGS USED BY THE KEYPAD
 ;	MONITOR.
-
-	ORG	2000H	; 8192 = beginning of RAM
 	
 START	DS	2	; DUMP STARTING ADDRESS
 ;
