@@ -1,0 +1,187 @@
+                        ;	MUSIC.ASM - a program to play music on the H8 Mini
+                        ;
+                        ;	Assumes 8255 PIA has been set up by monitor ROM
+                        ;
+                        ;	bugs: need to add rests
+                        ;
+                        ;	Glenn Roberts		6 September, 2026
+                        ;
+                        
+                        ;
+                        ;	H8 Mini equates
+                        ;
+                        ;	8255 PPI at 0F0-0F3
+                        ;
+   00f0                 PPI	EQU	0F0H
+   0000                 IO.A	EQU	0
+   0001                 IO.B	EQU	1
+                        
+   2040                 	ORG	2040H		; ORG at 040.100A
+                        ;
+                        ;	Plays the score then does a cold reboot on H8 Mini
+                        ;
+                        ;	First we disable all interrupts. Alternatively could pick just
+                        ;	the clock one to turn off but for now disable all.
+                        ;
+   2040   f3            START:	DI			; interrupts off
+                        ;
+                        ;	Now let's blank any front panel LEDs that were left lit when
+                        ;	we killed the update.
+                        ;
+   2041   db f0         BLANK:	IN	PPI+IO.A	; read port A settings
+   2043   e6 f0         	ANI	11110000B	; clear LED selects (PA0..PA3)
+   2045   47            	MOV	B,A		; save it
+   2046   0e 09         	MVI	C,9		; 9 LEDs
+   2048   81            BLOOP:	ADD	C		; address an LED
+   2049   d3 f0         	OUT	PPI+IO.A	; select it
+   204b   af            	XRA	A		; zero = all segments off
+   204c   d3 f1         	OUT	PPI+IO.B	; turn off all segments
+   204e   78            	MOV	A,B		; get back mask
+   204f   0d            	DCR	C		; count down
+   2050   c2 48 20      	JNZ	BLOOP		; and loop through all 9
+                        ;
+                        ;	Now play some notes
+                        ;
+   2053   21 82 20      TUNE:	LXI	H,SCORE		; point to the score (list of notes)
+                        ;
+                        ;	set speaker to "high" state
+                        ;
+   2056   db f0         	IN	PPI+IO.A	; Read Port A settings
+   2058   e6 3f         	ANI	00111111B	; Clear top two bits (PA6-7
+   205a   f6 80         	ORI	10000000B	; PA7 on; PA6 off
+   205c   d3 f0         	OUT	PPI+IO.A	; set speaker bit
+                        ;
+                        ;	Loop over notes. First test for a period of zero,
+                        ;	which indicates the end of the notes.
+                        ;
+   205e   7e            NOTES:	MOV	A,M		; (A) = half period
+   205f   b7            	ORA	A		; set flags
+   2060   ca 00 00      	JZ	0000H		; zero = end - cold boot the system
+                        
+   2063   47            	MOV	B,A		; (B) = 1/2 period delay
+   2064   23            	INX	H		; duration is next
+   2065   4e            	MOV	C,M		; (C) = duration
+                        ;
+                        ;	Now play a note. set speaker high, wait 1/2 period, then
+                        ;	set speaker low. repeat for note duration.
+                        ;
+                        ;	This loop uses the pitch value in B to determine how
+                        ;	long to wait between high and low (half period), toggling
+                        ;	the speaker through a number of cycles determined by the
+                        ;	note duration in (C).
+                        ;	
+   2066   50            TONE:	MOV	D,B		; wait 1/2 cycle
+   2067   cd 7c 20      	CALL	DELAY		; "high" state duration
+                        ;
+                        ;	Now toggle the speaker
+                        ;
+   206a   db f0         	IN	PPI+IO.A	; Read Port A settings
+   206c   ee 80         	XRI	10000000B	; toggle PA7
+   206e   d3 f0         	OUT	PPI+IO.A	; set speaker to "low"
+                        
+   2070   50            	MOV	D,B		; wait second 1/2 cycle
+   2071   cd 7c 20      	CALL	DELAY		; "low" state duration
+                        
+   2074   0d            	DCR	C		; Decrement duration counter
+   2075   c2 66 20      	JNZ	TONE		; Repeat square wave cycle if duration is not finished
+                        ;
+                        ;	End of note
+                        ;
+   2078   23            	INX	H		; Point to the next note
+   2079   c3 5e 20      	JMP	NOTES		; Play next note
+                        ;
+                        ;	DELAY - Called each time the output signal is to be
+                        ;	toggled, i.e. 1/2 the period. Each pass through the routine
+                        ;	takes 4+4+10=18 cycles. At 2mhz clock speed (.5us/cycle) that
+                        ;	amounts to 9uS per iteration. Table below gives the number of
+                        ;	iterations for each half cycle (between toggling the output)
+                        ;	needed to produce the desired tone frequency.
+                        ;
+                        ; Note	 F(Hz)	P(ms)  P/2(ms)	Iterations
+                        ; ====  ======  ====    ====    ==========
+                        ;  C	261.63	3.82	1.91	   212
+                        ;  C#	277.18	3.61	1.80	   200
+                        ;  D	293.66	3.41	1.70	   189
+                        ;  D#	311.13	3.21	1.61	   179
+                        ;  E	329.63	3.03	1.52	   169
+                        ;  F	349.23	2.86	1.43	   159
+                        ;  F#	369.99	2.70	1.35	   150
+                        ;  G	392.00	2.55	1.28	   142
+                        ;  G#	415.30	2.41	1.20	   134
+                        ;  A	440.00	2.27	1.14	   126
+                        ;  A#	466.16	2.15	1.07	   119
+                        ;  B	493.88	2.02	1.01	   112
+                        ;
+                        ;	(see spreadsheet for continuation)
+                        ;
+                        
+                        ;
+                        ;	DELAY just kills 9 uS of time
+                        ;
+   207c   00            DELAY:	NOP			; 4 cycles
+   207d   15            	DCR	D		; 4 cycles
+   207e   c2 7c 20      	JNZ	DELAY		; 10 cycles
+   2081   c9            	RET
+                        
+                        ;
+                        ;	Musical scale, 2 octaves (50ms per note)
+                        ;
+   2082   d4 0d         SCORE:	DB	212,13
+   2084   c8 0e         	DB	200,14
+   2086   bd 0f         	DB	189,15
+   2088   b3 10         	DB	179,16
+   208a   a9 10         	DB	169,16
+   208c   9f 11         	DB	159,17
+   208e   96 12         	DB	150,18
+   2090   8e 14         	DB	142,20
+   2092   86 15         	DB	134,21
+   2094   7e 16         	DB	126,22
+   2096   77 17         	DB	119,23
+   2098   70 19         	DB	112,25
+                        
+   209a   6a 1a         	DB	106,26
+   209c   64 1c         	DB	100,28
+   209e   5f 1d         	DB	95,29
+   20a0   59 1f         	DB	89,31
+   20a2   54 21         	DB	84,33
+   20a4   50 23         	DB	80,35
+   20a6   4b 25         	DB	75,37
+   20a8   47 27         	DB	71,39
+   20aa   43 2a         	DB	67,42
+   20ac   3f 2c         	DB	63,44
+   20ae   3c 2f         	DB	60,47
+   20b0   38 31         	DB	56,49
+                        
+   20b2   35 34         	DB	53,52
+   20b4   32 37         	DB	50,55
+   20b6   2f 3b         	DB	47,59
+   20b8   2d 3e         	DB	45,62
+   20ba   2a 42         	DB	42,66
+   20bc   28 46         	DB	40,70
+   20be   26 4a         	DB	38,74
+   20c0   23 4e         	DB	35,78
+   20c2   21 53         	DB	33,83
+   20c4   20 58         	DB	32,88
+   20c6   1e 5d         	DB	30,93
+   20c8   1c 63         	DB	28,99
+                        
+   20ca   1b 69         	DB	27,105
+   20cc   19 6f         	DB	25,111
+   20ce   18 75         	DB	24,117
+   20d0   16 7c         	DB	22,124
+   20d2   15 84         	DB	21,132
+   20d4   14 8c         	DB	20,140
+   20d6   13 94         	DB	19,148
+   20d8   12 9d         	DB	18,157
+   20da   11 a6         	DB	17,166
+   20dc   10 b0         	DB	16,176
+   20de   0f ba         	DB	15,186
+   20e0   0e c6         	DB	14,198
+                        
+   20e2   00            	DB	0
+                        
+   2040                 	END	START
+2041  BLANK         2048  BLOOP         207c  DELAY         0000  IO.A      
+0001  IO.B          205e  NOTES         00f0  PPI           2082  SCORE     
+2040  START         2066  TONE          2053  TUNE          
+
