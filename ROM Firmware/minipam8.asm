@@ -1,7 +1,7 @@
 ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 ;
 ;	MiniPAM8 - monitor for H8 Mini
-;	Rev. 0.9.0 Beta
+;	Rev. 0.9.1 Beta
 ;
 ;	This is a modified version of PAM/8, originally written by Gordon
 ;	Letwin 50 years ago! This version is designed to support Lee Hart's
@@ -27,7 +27,11 @@
 ;	for use with the A85 assembler, 25 July, 2026.
 ;
 ;	Other modifications/enhancements by Glenn Roberts (GFR),
-;	Augutst-September, 2026.
+;	August-September, 2026.
+;
+;	Revision History:
+;	0.9.0	initial beta
+;	0.9.1	added interrupt-driven console input buffer
 ;
 ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 ;
@@ -304,23 +308,25 @@ DLY2:	CMP	M		; wait until ticks have passed
 
 ;	CINT - serial I/O interrupt handler
 ;
-;	This interrupt is triggered by a transition from low to
-;	high on the SID line, which is an inverted version of the RX
-;	signal on the serial input header. This transition indicates
-;	the start bit of a 10-bit sequence (start bit, 8-bit data byte
-;	and stop bit). This handler decodes the byte and stores it for
-;	later retrieval, setting a flag to indicate data is ready. There
-;	currently is not a ring buffer so the user application must
-;	poll frequently for data. Since the 2ms interrupt (RST 7.5) is
-;	a higher priority and involves somewhat lengthy processing, its
-;	handler must yield for the RST 6.5 handler to process a byte even
-;	if it is in the middle of a clock update.
+;	This interrupt is triggered by a transition from low to high on the
+;	SID line, which is an inverted version of the RX signal on the serial
+;	input header. This transition indicates the start bit of a 10-bit sequence
+;	(start bit, 8-bit data byte,and stop bit).
 ;
-;	Use the SID and SOD pins on the Intel 8085 for bit-bang
-;	serial I/O. This driver uses fixed bitrate constants for 
-;	delay routines used to pace serial transmit/receive.
+;	This handler first decodes the byte and stores it in a buffer by
+;	first incrementing the buffer count and then adding the byte to the
+;	tail of the buffer. The task-time code to read data can check the
+;	byte count to see if there is any data in the buffer. Currently this
+;	routine silently discards any overrun bytes.
 ;
-;	Derived from Intel Application Note AP-29, August 1977.
+;	Since the 2ms interrupt (RST 7.5) is a higher priority and involves
+;	somewhat lengthy processing, its handler must yield for the RST 6.5
+;	handler to process a byte even if it is in the middle of a clock update.
+;
+;	The SID and SOD pins on the Intel 8085 are used for bit-banged serial I/O.
+;	The effective BAUD rate is set by fixed bit rate constants, which are used
+;	to delay between bit samples. For more information consult Intel Application
+;	Note AP-29, August 1977.
 ;
 CINT:	PUSH	PSW
 	PUSH	B
@@ -360,15 +366,23 @@ CI4:	DCR	L		; of the next bit and will keep
 	NOP			; Equalize OUT and IN loop times
 	JMP	CI3		; Get more bits
 ;
-;	We now have all 8 bits, store the byte and indicate that
-;	it is ready to be read
+;	We now have all 8 bits in (C), store the byte in the buffer
 ;
-CI5:	LXI	H,IOBYTE	; point to storage
-	MOV	M,C		; save it
-	INX	H		; NOTE: assumes NBYTES follows IOBYTE
-	MVI	M,1		; one byte available
+CI5:	LXI	H,INBADDR	; (HL) = address of buffer
+	CALL	$HLIHL		; (HL) = buffer
+	LDA	INBLEN		; (A) = buffer length
+	CMP	M		; see if there's room for more
+	JC	CI6		; no, just ignore (should do more)
+;
+;	There's room to store the byte so process it
+;
+	INR	M		; bump the count
+	MOV	A,M		; fetch the count
+	ADD	L		; A = L + A
+	MOV	L,A		; L += A; (HL) = address of character
+	MOV	M,C		; store the character
 
-	POP	H
+CI6:	POP	H
 	POP	B
 	POP	PSW
 	EI
@@ -437,10 +451,17 @@ INIT2:	DCX	H		; set to one minus memory limit
 ;
 	CALL	PPS
 ;
-;	Set up interrupt vectors
+;	Set up console serial interrupt handler values in RAM
 ;
+	LXI	H,$INBUF	; (HL) = default input buffer
+	SHLD	INBADDR		; save that location
 	XRA	A		; clear serial I/O byte count
-	STA	NBYTES
+	MOV	M,A		; set byte count to 0
+	MVI	A,$INBUFL	; buffer length
+	STA	INBLEN		; save that too
+;
+;	Enable clock and console interrupts
+;
 	MVI	A,00001001B	; enable RST 7.5 (clock) and RST 6.5 (serial)
 	SIM			; apply the mask
 	EI			; globally enable interrupts
@@ -1223,6 +1244,16 @@ UFD1	PUSH	PSW
 	SHLD	DLEDS+1
 	RET
 
+;	$HLIHL - Load HL indirect through HL
+;
+;	(HL) = ((HL))
+;
+;	USES:	A,H,L
+$HLIHL:	MOV	A,M
+	INX	H
+	MOV	H,M
+	MOV	L,A
+	RET
 
 ;	I/O ROUTINES TO BE COPIED INTO AND USED IN RAM.
 ;
@@ -1261,8 +1292,6 @@ PRSROM:	DB	1	; REFIND
 ;;double semicolons denote changes from Jon Chapman's code
 ;;resume editing at ------------
 ;;
-;; other double-semicolon edits by Glenn Roberts marked 'gfr'
-
 ;
 ;Hardware Equates
 ;
@@ -1802,79 +1831,49 @@ NULCMD:	DB	0		; terminate command list
 ;
 ;	CINNE -- Get a char from the console, no echo
 ;
-;	Since serial I/O is interrupt-driven we simply
-;	look to see if a byte is available. If not, we wait
-;	otherwise return the byte and reset the NBYTES count.
-;	Put interrupts on hold while we're playing with these
-;	values
+;	This is a blocking read. We wait until a character is available.
+;	Since serial I/O is interrupt-driven we simply look to see if
+;	a byte is available. If not, we wait otherwise retrieve the byte
+;	and shift the buffer contents down one. We put interrupts on hold
+;	while we're playing with these values.
 ;
-
-CINNE:	LDA	NBYTES		; get byte count
+CINNE:	PUSH	H
+	PUSH	B
+	
+	LXI	H,INBADDR	; (HL) = address of buffer location
+	CALL	$HLIHL		; (HL) = buffer
+CINN1:	MOV	A,M		; get byte count
 	ORA	A		; test for zero
-	JZ	CINNE		; loop if nothing there
+	JZ	CINN1		; loop if nothing there
 ;
-;	we have a byte, load it and return
+;	we have a byte in the buffer! - load it and return
 ;
 	DI			; don't step on the IRQ handler
-	XRA	A		; zero the count
-	STA	NBYTES		; save it
-	LDA	IOBYTE		; fetch the byte
-	EI
+	
+	DCR	M		; decrement the byte count
+	MOV	C,M		; (C) = count - 1
+	INX	H		; point to byte to be read
+	MOV	B,M		; (B) = character we want
+	
+CINN2:	DCR	C		; move others down
+	JM	CINN3		; no more
+	INX	H		; next one
+	MOV	A,M		; fetch it
+	DCX	H		; back one
+	MOV	M,A		; store it
+	INX	H		; fix pointer
+	JMP	CINN2		; and loop
+	
+CINN3:	EI			; restore interrupts
+	MOV	A,B		; get back our byte
+	
+	POP	B
+	POP	H
 	
 	CPI	CANCEL		; Check for CANCEL character
 	JZ	WSTART		; Yes, warm start monitor
 	RET
 	
-;	PUSH	H
-;	LXI	H,NBYTES	; point to counter
-;	
-;
-;	Here we just wait for a start bit. This should happen
-;	before disabling interrupts - gfr
-;
-;CI1:	RIM			; read RIN signal
-;	ANI	080h		; check for start bit
-;	JZ	CI1		; wait 'til we get one...
-;
-;	Incoming data... here we go!
-;
-;	DI			;Must disable interrupts
-;	MVI	B,9		;Receive bits counter
-;
-;
-;	LXI	H,HALFBIT	;Delay one half-bit time, this puts
-;CI2:	DCR	L		;us in the middle of the start bit
-;	JNZ	CI2
-;	DCR	H
-;	JNZ	CI2
-;;
-;;	Now start reading the byte - gfr
-;;
-;CI3:	LXI	H,BITTIME	;Delay one bit-time, since we are shifted
-;CI4:	DCR	L		;a half-bit time through the start bit, this
-;	JNZ	CI4		;will keep us in the middle of bits for
-;	DCR	H		;reliable sampling.
-;	JNZ	CI4
-;
-;	RIM			;Read the SID line
-;	CMA			; invert for H8 Mini - gfr
-;	RAL			; CY = data bit (invert for H8 Mini)
-;	DCR	B		; Determine if this is a stop bit
-;	JZ	CI5		; Stop bit, done with char receive (invert H8 Mini)
-;
-;	MOV	A,C		;Not done, rotate a bit in CY into C
-;	RAR
-;	MOV	C,A
-;	NOP			;Equalize COUT and CINNE loop times
-;	JMP	CI3		;Get more bits
-;
-;CI5:	POP	H		;Restore HL
-;	MOV	A,C		;A = received character
-;	POP	B		;Restore BC
-;	EI
-;	CPI	CANCEL		;Check for CANCEL character
-;	JZ	WSTART		;Yes, warm start monitor
-;	RET
 
 ;
 ;COUT -- Output a character to the console
@@ -2526,8 +2525,17 @@ UIVEC			; USER INTERRUPT VECTOR
 ;
 PCKVAL	DS	1	; PCK value from most recent scan (9 ticks)
 PCKTMP	DS	1	; temporary candidate keypad response from PCK
+;
+;	We want to limit our monitor RAM storage to 40H or fewer bytes
+;	so we have only a small serial handler buffer here (2 bytes)
+;	but the user can overwrite these values to make it as
+;	large as need be.
+;
+INBADDR	DW	$INBUF	; points to location of input buffer
+INBLEN	DB	$INBUFL	; max length of buffer
+$INBUF	DB	0	; input buffer count
+	DS	2	; very small buffer
+$INBUFL	EQU	*-$INBUF-2	; max length of buffer
 
-IOBYTE	DS	1	; byte read by serial I/O handler
-NBYTES	DS	1	; number of bytes read (0 or 1)
 
 	END
