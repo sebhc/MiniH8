@@ -1,7 +1,7 @@
 ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
 ;
 ;	MiniPAM8 - monitor for H8 Mini
-;	Rev. 0.9.1 Beta
+;	Rev. 00.09.02 Beta
 ;
 ;	This is a modified version of PAM/8, originally written by Gordon
 ;	Letwin 50 years ago! This version is designed to support Lee Hart's
@@ -230,6 +230,7 @@ INIT0	LXI	D,PRSROM	; (DE) = ROM COPY OF PRS CODE
 	JMP	INIT		; INITIALIZE
 ;	ERRPL	INIT-1000Q	; BYTE IN WORD 10A MUST BE 0
 
+PAMVER$	DB 'MINIPAM 00.09.02 ','B' + 80H
 
 
 ;	Interrupt 5.5 - caused by RTM/0 key combination
@@ -1273,7 +1274,6 @@ PRSROM:	DB	1	; REFIND
 
 
 
-	ORG	0400H
 ;
 ;	Here is a modified version of Jon Chapman's
 ;	GWMON. Jumping here invokes the console monitor loop.
@@ -1301,12 +1301,25 @@ PRSROM:	DB	1	; REFIND
 
 ; get console ready for I/O
 ;
-GWMON	EQU	*
+;
+;	To maintain known entry points for useful routines
+;	we put the appropriate jump instructions here
 
-	XRA	A		;NUL in A
+	ORG	0400H
+	
+	JMP	GWMON		; 400H - Main monitor entry point
+	JMP	WSTART		; 403H - warm restart
+	JMP	CINNE		; 406H - Read character from console (no echo)
+	JMP	COUT		; 409H - Write character to console
+	
+
+GWMON:	XRA	A		;NUL in A
 	CALL	COUT		;Clear the line
 	
-	LXI	H, SIGNON$	;SM signon
+	LXI	H, SIGNON$	; SM signon
+	CALL	PRTCLS
+	
+	LXI	H, PAMVER$	; report PAM/8 version too
 	CALL	PRTCLS
 ;
 ;WSTART -- Warm start routine
@@ -1869,9 +1882,11 @@ CINN3:	EI			; restore interrupts
 	
 	POP	B
 	POP	H
-	
-	CPI	CANCEL		; Check for CANCEL character
-	JZ	WSTART		; Yes, warm start monitor
+
+;	warm restart feature disabled - gfr
+;	
+;	CPI	CANCEL		; Check for CANCEL character
+;	JZ	WSTART		; Yes, warm start monitor
 	RET
 	
 

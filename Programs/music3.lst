@@ -1,0 +1,942 @@
+                        ; MUSIC3 - Program to play music on the H8 Mini
+                        ;
+                        ; Based on the approach by James Grogan and Robert Monteith.
+                        ;
+                        ; This approach was first discussed in Monteith's contribution to HUG 885-1008
+                        ; (Heath User Group's first software volume). By lifting pin 9 on IC112
+                        ; on the H8 front panel the speaker output can be converted to direct control
+                        ; by the CPU (otherwise the CPU simply toggles the 1Khz square wave input
+                        ; to the speaker.) The approach was further refined by Grogan and published
+                        ; in HUG 885-1031 volumes A and B. The approach taken was to develop a Benton Harbor
+                        ; BASIC program to create/edit music. The output of the BASIC program was an
+                        ; HDOS executable (.ABS file) consisting of a short assembly program and
+                        ; the musical SCORE. This program is based on a disassembly of the .ABS file
+                        ; (the ASM source for that was never published).
+                        ;
+                        ; The advantage of this approach is that there are multiple music files
+                        ; that have already been created that can be adapted to the Mini H8.
+                        ;
+                        ; G. Roberts	October 2026
+                        ;
+                        
+                        ;
+                        ;	H8 Mini equates
+                        ;
+                        ;	8255 PPI at 0F0-0F3
+                        ;
+   00f0                 PPI	EQU	0F0H
+   0000                 IO.A	EQU	0
+   0001                 IO.B	EQU	1
+                        
+   2040                 	ORG	2040H		; ORG at 040.100A
+                        ;
+                        ;	Plays the score then does a cold reboot on H8 Mini
+                        ;
+   2040   f3            START:	DI			; interrupts off
+                        ;
+                        ;	Blank any front panel LEDs that were left lit when
+                        ;	we killed the update.
+                        ;
+   2041   db f0         BLANK:	IN	PPI+IO.A	; read port A settings
+   2043   e6 f0         	ANI	11110000B	; clear LED selects (PA0..PA3)
+   2045   47            	MOV	B,A		; save it
+   2046   0e 09         	MVI	C,9		; 9 LEDs
+   2048   81            BLOOP:	ADD	C		; address an LED
+   2049   d3 f0         	OUT	PPI+IO.A	; select it
+   204b   af            	XRA	A		; zero = all segments off
+   204c   d3 f1         	OUT	PPI+IO.B	; turn off all segments
+   204e   78            	MOV	A,B		; get back mask
+   204f   0d            	DCR	C		; count down
+   2050   c2 48 20      	JNZ	BLOOP		; and loop through all 9
+                        
+   2053   cd 5a 20      	CALL	PLAY		; play the tune
+                        	
+   2056   fb            	EI			; interrupts on
+   2057   c3 00 00      	JMP	0H		; reboot
+                        	
+                        ;
+                        ;	Play SCORE
+                        ;
+   205a   21 a7 20      PLAY:	LXI	H,SCORE		; point to score
+   205d   e5            	PUSH	H		; keep our place
+                        ;
+                        ;	Note loop
+                        ;
+   205e   e1            NLOOP:	POP	H		; our place in the score
+   205f   5e            	MOV	E,M
+   2060   23            	INX	H
+   2061   56            	MOV	D,M		; (DE) = note duration
+   2062   23            	INX	H
+   2063   7a            	MOV	A,D		; test for zero
+   2064   b3            	ORA	E
+   2065   ca 91 20      	JZ	PEXIT		; tune over
+   2068   4e            	MOV	C,M
+   2069   23            	INX	H
+   206a   46            	MOV	B,M		; (BC) = period counter
+   206b   23            	INX	H
+   206c   e5            	PUSH	H		; save our place in the score
+                        	
+   206d   78            	MOV	A,B
+   206e   b1            	ORA	C
+   206f   c2 81 20      	JNZ	PNOTE		; BC == 0 ? rest (DE) units, else note
+                        ;
+                        ;	Rest - duration = (DE)
+                        ;	
+   2072   06 32         REST:	MVI	B,50		; 7 states
+                        ;
+                        ;	loop count: 7 + 50*15 + 5 + 5 + 4 + 10 = 781 = 390 uS
+                        ;
+   2074   05            ILOOP:	DCR	B		; 5 states (on 8080); 4 cycles (8085)
+   2075   c2 74 20      	JNZ	ILOOP		; 10 states
+                        	
+   2078   1b            	DCX	D		; 5 states (8080); 6 states (8085)
+   2079   7a            	MOV	A,D		; 5 states (8085); 4 states (8085)
+   207a   b3            	ORA	E		; 4 states
+   207b   c2 72 20      	JNZ	REST		; 10 states
+                        	
+   207e   c3 5e 20      	JMP	NLOOP
+                        ;
+                        ;	Play note - duration = (DE)
+                        ;
+   2081   60            PNOTE:	MOV	H,B
+   2082   69            	MOV	L,C		; (HL) = half period count
+                        ;
+                        ;	set speaker to "high" state
+                        ;
+   2083   db f0         	IN	PPI+IO.A	; Read Port A settings
+   2085   e6 3f         	ANI	00111111B	; Clear top two bits (PA6-7
+   2087   f6 80         	ORI	10000000B	; PA7 on; PA6 off
+   2089   d3 f0         	OUT	PPI+IO.A	; set speaker bit
+                        
+   208b   cd 92 20      	CALL	NOTE		; play the note
+                        	
+   208e   c3 5e 20      	JMP	NLOOP		; go to next note
+                        
+   2091   c9            PEXIT:	RET			; tune is done
+                        
+                        ;
+                        ;	NOTE - Play a note
+                        ;
+                        ;	ENTRY:	A = speaker mask
+                        ;		DE = duration
+                        ;		HL = half period
+                        ;
+                        ;	USES:	BC
+                        ;
+   2092                 NOTE	EQU	*
+                        ;
+                        ;	count half the period (HL)
+                        ;
+                        ;	12 uS per loop
+                        ;
+   2092   44            	MOV	B,H
+   2093   4d            	MOV	C,L		; (BC) = half period count
+   2094   0b            NOTE1:	DCX 	B		; 5 cycles (8080), 6 cycles (8085)
+   2095   78            	MOV	A,B		; 5 cycles (8080), 4 cycles (8085)
+   2096   b1            	ORA	C		; 4 cycles (8080 & 8085)
+   2097   c2 94 20      	JNZ	NOTE1		; 10 cycles
+                        ;
+                        ;	Toggle speaker bits
+                        ;
+   209a   db f0         	IN	PPI+IO.A	; Read Port A settings
+   209c   ee c0         	XRI	11000000B	; toggle PA6, PA7
+   209e   d3 f0         	OUT	PPI+IO.A	; toggle speaker
+                        ;
+                        ;	count down the time 'til done
+                        ;	
+   20a0   1b            	DCX	D
+   20a1   7a            	MOV	A,D
+   20a2   b3            	ORA	E		; (DE) == 0?
+   20a3   c2 92 20      	JNZ	NOTE		; and keep toggling
+                        	
+   20a6   c9            	RET
+                        	
+                        
+   20a7                 SCORE	EQU	*
+                        ;
+                        ;	Each note is a word pair. The first word is the note
+                        ;	duration and the second word is one half the note period
+                        ;	A zero duration ends the tune. a zero half period is a rest.
+                        ;
+                        	INCL	"MOZART.TXT"
+   20a7   5d 0f         ﻿	DW	0F5DH
+   20a9   00 00         	DW	0000H
+   20ab   93 00         	DW	0093H
+   20ad   6a 00         	DW	006AH
+   20af   83 00         	DW	0083H
+   20b1   77 00         	DW	0077H
+   20b3   7c 00         	DW	007CH
+   20b5   7e 00         	DW	007EH
+   20b7   93 00         	DW	0093H
+   20b9   6a 00         	DW	006AH
+   20bb   c3 00         	DW	00C3H
+   20bd   4f 00         	DW	004FH
+   20bf   f6 00         	DW	00F6H
+   20c1   3e 00         	DW	003EH
+   20c3   db 00         	DW	00DBH
+   20c5   46 00         	DW	0046H
+   20c7   c3 00         	DW	00C3H
+   20c9   4f 00         	DW	004FH
+   20cb   ba 00         	DW	00BAH
+   20cd   53 00         	DW	0053H
+   20cf   db 00         	DW	00DBH
+   20d1   46 00         	DW	0046H
+   20d3   06 01         	DW	0106H
+   20d5   3a 00         	DW	003AH
+   20d7   4d 01         	DW	014DH
+   20d9   2d 00         	DW	002DH
+   20db   28 01         	DW	0128H
+   20dd   33 00         	DW	0033H
+   20df   06 01         	DW	0106H
+   20e1   3a 00         	DW	003AH
+   20e3   f6 00         	DW	00F6H
+   20e5   3e 00         	DW	003EH
+   20e7   28 01         	DW	0128H
+   20e9   33 00         	DW	0033H
+   20eb   86 01         	DW	0186H
+   20ed   26 00         	DW	0026H
+   20ef   74 01         	DW	0174H
+   20f1   28 00         	DW	0028H
+   20f3   86 01         	DW	0186H
+   20f5   26 00         	DW	0026H
+   20f7   4d 01         	DW	014DH
+   20f9   2d 00         	DW	002DH
+   20fb   79 03         	DW	0379H
+   20fd   33 00         	DW	0033H
+   20ff   3a 01         	DW	013AH
+   2101   30 00         	DW	0030H
+   2103   4d 01         	DW	014DH
+   2105   2d 00         	DW	002DH
+   2107   28 01         	DW	0128H
+   2109   33 00         	DW	0033H
+   210b   06 01         	DW	0106H
+   210d   3a 00         	DW	003AH
+   210f   28 01         	DW	0128H
+   2111   33 00         	DW	0033H
+   2113   06 01         	DW	0106H
+   2115   3a 00         	DW	003AH
+   2117   f6 00         	DW	00F6H
+   2119   3e 00         	DW	003EH
+   211b   db 00         	DW	00DBH
+   211d   46 00         	DW	0046H
+   211f   c3 00         	DW	00C3H
+   2121   4f 00         	DW	004FH
+   2123   ba 00         	DW	00BAH
+   2125   53 00         	DW	0053H
+   2127   c3 00         	DW	00C3H
+   2129   4f 00         	DW	004FH
+   212b   ba 00         	DW	00BAH
+   212d   53 00         	DW	0053H
+   212f   a5 00         	DW	00A5H
+   2131   5e 00         	DW	005EH
+   2133   93 00         	DW	0093H
+   2135   6a 00         	DW	006AH
+   2137   83 00         	DW	0083H
+   2139   77 00         	DW	0077H
+   213b   7c 00         	DW	007CH
+   213d   7e 00         	DW	007EH
+   213f   93 00         	DW	0093H
+   2141   6a 00         	DW	006AH
+   2143   c3 00         	DW	00C3H
+   2145   4f 00         	DW	004FH
+   2147   f6 00         	DW	00F6H
+   2149   3e 00         	DW	003EH
+   214b   06 01         	DW	0106H
+   214d   3a 00         	DW	003AH
+   214f   db 00         	DW	00DBH
+   2151   46 00         	DW	0046H
+   2153   0c 03         	DW	030CH
+   2155   4f 00         	DW	004FH
+   2157   a4 00         	DW	00A4H
+   2159   3e 00         	DW	003EH
+   215b   92 00         	DW	0092H
+   215d   46 00         	DW	0046H
+   215f   82 00         	DW	0082H
+   2161   4f 00         	DW	004FH
+   2163   ba 00         	DW	00BAH
+   2165   53 00         	DW	0053H
+   2167   db 00         	DW	00DBH
+   2169   46 00         	DW	0046H
+   216b   0d 02         	DW	020DH
+   216d   3a 00         	DW	003AH
+   216f   af 00         	DW	00AFH
+   2171   3a 00         	DW	003AH
+   2173   a4 00         	DW	00A4H
+   2175   3e 00         	DW	003EH
+   2177   92 00         	DW	0092H
+   2179   46 00         	DW	0046H
+   217b   c3 00         	DW	00C3H
+   217d   4f 00         	DW	004FH
+   217f   f6 00         	DW	00F6H
+   2181   3e 00         	DW	003EH
+   2183   51 02         	DW	0251H
+   2185   33 00         	DW	0033H
+   2187   c6 00         	DW	00C6H
+   2189   33 00         	DW	0033H
+   218b   af 00         	DW	00AFH
+   218d   3a 00         	DW	003AH
+   218f   a4 00         	DW	00A4H
+   2191   3e 00         	DW	003EH
+   2193   db 00         	DW	00DBH
+   2195   46 00         	DW	0046H
+   2197   06 01         	DW	0106H
+   2199   3a 00         	DW	003AH
+   219b   9b 02         	DW	029BH
+   219d   2d 00         	DW	002DH
+   219f   74 01         	DW	0174H
+   21a1   53 00         	DW	0053H
+   21a3   0c 03         	DW	030CH
+   21a5   4f 00         	DW	004FH
+   21a7   93 00         	DW	0093H
+   21a9   6a 00         	DW	006AH
+   21ab   83 00         	DW	0083H
+   21ad   77 00         	DW	0077H
+   21af   7c 00         	DW	007CH
+   21b1   7e 00         	DW	007EH
+   21b3   93 00         	DW	0093H
+   21b5   6a 00         	DW	006AH
+   21b7   c3 00         	DW	00C3H
+   21b9   4f 00         	DW	004FH
+   21bb   f6 00         	DW	00F6H
+   21bd   3e 00         	DW	003EH
+   21bf   db 00         	DW	00DBH
+   21c1   46 00         	DW	0046H
+   21c3   c3 00         	DW	00C3H
+   21c5   4f 00         	DW	004FH
+   21c7   ba 00         	DW	00BAH
+   21c9   53 00         	DW	0053H
+   21cb   db 00         	DW	00DBH
+   21cd   46 00         	DW	0046H
+   21cf   06 01         	DW	0106H
+   21d1   3a 00         	DW	003AH
+   21d3   4d 01         	DW	014DH
+   21d5   2d 00         	DW	002DH
+   21d7   28 01         	DW	0128H
+   21d9   33 00         	DW	0033H
+   21db   06 01         	DW	0106H
+   21dd   3a 00         	DW	003AH
+   21df   f6 00         	DW	00F6H
+   21e1   3e 00         	DW	003EH
+   21e3   28 01         	DW	0128H
+   21e5   33 00         	DW	0033H
+   21e7   86 01         	DW	0186H
+   21e9   26 00         	DW	0026H
+   21eb   74 01         	DW	0174H
+   21ed   28 00         	DW	0028H
+   21ef   86 01         	DW	0186H
+   21f1   26 00         	DW	0026H
+   21f3   4d 01         	DW	014DH
+   21f5   2d 00         	DW	002DH
+   21f7   79 03         	DW	0379H
+   21f9   33 00         	DW	0033H
+   21fb   3a 01         	DW	013AH
+   21fd   30 00         	DW	0030H
+   21ff   4d 01         	DW	014DH
+   2201   2d 00         	DW	002DH
+   2203   28 01         	DW	0128H
+   2205   33 00         	DW	0033H
+   2207   06 01         	DW	0106H
+   2209   3a 00         	DW	003AH
+   220b   28 01         	DW	0128H
+   220d   33 00         	DW	0033H
+   220f   06 01         	DW	0106H
+   2211   3a 00         	DW	003AH
+   2213   f6 00         	DW	00F6H
+   2215   3e 00         	DW	003EH
+   2217   db 00         	DW	00DBH
+   2219   46 00         	DW	0046H
+   221b   c3 00         	DW	00C3H
+   221d   4f 00         	DW	004FH
+   221f   ba 00         	DW	00BAH
+   2221   53 00         	DW	0053H
+   2223   c3 00         	DW	00C3H
+   2225   4f 00         	DW	004FH
+   2227   ba 00         	DW	00BAH
+   2229   53 00         	DW	0053H
+   222b   a5 00         	DW	00A5H
+   222d   5e 00         	DW	005EH
+   222f   93 00         	DW	0093H
+   2231   6a 00         	DW	006AH
+   2233   83 00         	DW	0083H
+   2235   77 00         	DW	0077H
+   2237   7c 00         	DW	007CH
+   2239   7e 00         	DW	007EH
+   223b   93 00         	DW	0093H
+   223d   6a 00         	DW	006AH
+   223f   c3 00         	DW	00C3H
+   2241   4f 00         	DW	004FH
+   2243   f6 00         	DW	00F6H
+   2245   3e 00         	DW	003EH
+   2247   06 01         	DW	0106H
+   2249   3a 00         	DW	003AH
+   224b   db 00         	DW	00DBH
+   224d   46 00         	DW	0046H
+   224f   0c 03         	DW	030CH
+   2251   4f 00         	DW	004FH
+   2253   a4 00         	DW	00A4H
+   2255   3e 00         	DW	003EH
+   2257   92 00         	DW	0092H
+   2259   46 00         	DW	0046H
+   225b   82 00         	DW	0082H
+   225d   4f 00         	DW	004FH
+   225f   ba 00         	DW	00BAH
+   2261   53 00         	DW	0053H
+   2263   db 00         	DW	00DBH
+   2265   46 00         	DW	0046H
+   2267   0d 02         	DW	020DH
+   2269   3a 00         	DW	003AH
+   226b   af 00         	DW	00AFH
+   226d   3a 00         	DW	003AH
+   226f   a4 00         	DW	00A4H
+   2271   3e 00         	DW	003EH
+   2273   92 00         	DW	0092H
+   2275   46 00         	DW	0046H
+   2277   c3 00         	DW	00C3H
+   2279   4f 00         	DW	004FH
+   227b   f6 00         	DW	00F6H
+   227d   3e 00         	DW	003EH
+   227f   51 02         	DW	0251H
+   2281   33 00         	DW	0033H
+   2283   c6 00         	DW	00C6H
+   2285   33 00         	DW	0033H
+   2287   af 00         	DW	00AFH
+   2289   3a 00         	DW	003AH
+   228b   a4 00         	DW	00A4H
+   228d   3e 00         	DW	003EH
+   228f   db 00         	DW	00DBH
+   2291   46 00         	DW	0046H
+   2293   06 01         	DW	0106H
+   2295   3a 00         	DW	003AH
+   2297   9b 02         	DW	029BH
+   2299   2d 00         	DW	002DH
+   229b   74 01         	DW	0174H
+   229d   53 00         	DW	0053H
+   229f   0c 03         	DW	030CH
+   22a1   4f 00         	DW	004FH
+   22a3   f6 00         	DW	00F6H
+   22a5   3e 00         	DW	003EH
+   22a7   14 01         	DW	0114H
+   22a9   37 00         	DW	0037H
+   22ab   28 01         	DW	0128H
+   22ad   33 00         	DW	0033H
+   22af   14 01         	DW	0114H
+   22b1   37 00         	DW	0037H
+   22b3   28 01         	DW	0128H
+   22b5   33 00         	DW	0033H
+   22b7   14 01         	DW	0114H
+   22b9   37 00         	DW	0037H
+   22bb   28 01         	DW	0128H
+   22bd   33 00         	DW	0033H
+   22bf   14 01         	DW	0114H
+   22c1   37 00         	DW	0037H
+   22c3   28 01         	DW	0128H
+   22c5   33 00         	DW	0033H
+   22c7   74 01         	DW	0174H
+   22c9   28 00         	DW	0028H
+   22cb   4d 01         	DW	014DH
+   22cd   2d 00         	DW	002DH
+   22cf   28 01         	DW	0128H
+   22d1   33 00         	DW	0033H
+   22d3   14 01         	DW	0114H
+   22d5   37 00         	DW	0037H
+   22d7   f6 00         	DW	00F6H
+   22d9   3e 00         	DW	003EH
+   22db   db 00         	DW	00DBH
+   22dd   46 00         	DW	0046H
+   22df   d0 00         	DW	00D0H
+   22e1   4a 00         	DW	004AH
+   22e3   db 00         	DW	00DBH
+   22e5   46 00         	DW	0046H
+   22e7   d0 00         	DW	00D0H
+   22e9   4a 00         	DW	004AH
+   22eb   db 00         	DW	00DBH
+   22ed   46 00         	DW	0046H
+   22ef   d0 00         	DW	00D0H
+   22f1   4a 00         	DW	004AH
+   22f3   db 00         	DW	00DBH
+   22f5   46 00         	DW	0046H
+   22f7   e8 00         	DW	00E8H
+   22f9   42 00         	DW	0042H
+   22fb   f6 00         	DW	00F6H
+   22fd   3e 00         	DW	003EH
+   22ff   db 00         	DW	00DBH
+   2301   46 00         	DW	0046H
+   2303   c3 00         	DW	00C3H
+   2305   4f 00         	DW	004FH
+   2307   ba 00         	DW	00BAH
+   2309   53 00         	DW	0053H
+   230b   a5 00         	DW	00A5H
+   230d   5e 00         	DW	005EH
+   230f   9b 00         	DW	009BH
+   2311   64 00         	DW	0064H
+   2313   a5 00         	DW	00A5H
+   2315   5e 00         	DW	005EH
+   2317   9b 00         	DW	009BH
+   2319   64 00         	DW	0064H
+   231b   a5 00         	DW	00A5H
+   231d   5e 00         	DW	005EH
+   231f   9b 00         	DW	009BH
+   2321   64 00         	DW	0064H
+   2323   a5 00         	DW	00A5H
+   2325   5e 00         	DW	005EH
+   2327   ba 00         	DW	00BAH
+   2329   53 00         	DW	0053H
+   232b   db 00         	DW	00DBH
+   232d   46 00         	DW	0046H
+   232f   c3 00         	DW	00C3H
+   2331   4f 00         	DW	004FH
+   2333   ba 00         	DW	00BAH
+   2335   53 00         	DW	0053H
+   2337   a5 00         	DW	00A5H
+   2339   5e 00         	DW	005EH
+   233b   93 00         	DW	0093H
+   233d   6a 00         	DW	006AH
+   233f   8b 00         	DW	008BH
+   2341   70 00         	DW	0070H
+   2343   93 00         	DW	0093H
+   2345   6a 00         	DW	006AH
+   2347   8b 00         	DW	008BH
+   2349   70 00         	DW	0070H
+   234b   93 00         	DW	0093H
+   234d   6a 00         	DW	006AH
+   234f   8b 00         	DW	008BH
+   2351   70 00         	DW	0070H
+   2353   4b 02         	DW	024BH
+   2355   6a 00         	DW	006AH
+   2357   28 01         	DW	0128H
+   2359   33 00         	DW	0033H
+   235b   4d 01         	DW	014DH
+   235d   2d 00         	DW	002DH
+   235f   5c 01         	DW	015CH
+   2361   2b 00         	DW	002BH
+   2363   d0 00         	DW	00D0H
+   2365   4a 00         	DW	004AH
+   2367   db 00         	DW	00DBH
+   2369   46 00         	DW	0046H
+   236b   f6 00         	DW	00F6H
+   236d   3e 00         	DW	003EH
+   236f   06 01         	DW	0106H
+   2371   3a 00         	DW	003AH
+   2373   28 01         	DW	0128H
+   2375   33 00         	DW	0033H
+   2377   3a 01         	DW	013AH
+   2379   30 00         	DW	0030H
+   237b   ba 00         	DW	00BAH
+   237d   53 00         	DW	0053H
+   237f   c3 00         	DW	00C3H
+   2381   4f 00         	DW	004FH
+   2383   db 00         	DW	00DBH
+   2385   46 00         	DW	0046H
+   2387   e8 00         	DW	00E8H
+   2389   42 00         	DW	0042H
+   238b   06 01         	DW	0106H
+   238d   3a 00         	DW	003AH
+   238f   28 01         	DW	0128H
+   2391   33 00         	DW	0033H
+   2393   db 00         	DW	00DBH
+   2395   46 00         	DW	0046H
+   2397   e8 00         	DW	00E8H
+   2399   42 00         	DW	0042H
+   239b   ba 00         	DW	00BAH
+   239d   53 00         	DW	0053H
+   239f   c3 00         	DW	00C3H
+   23a1   4f 00         	DW	004FH
+   23a3   8b 00         	DW	008BH
+   23a5   70 00         	DW	0070H
+   23a7   4b 02         	DW	024BH
+   23a9   6a 00         	DW	006AH
+   23ab   93 00         	DW	0093H
+   23ad   6a 00         	DW	006AH
+   23af   83 00         	DW	0083H
+   23b1   77 00         	DW	0077H
+   23b3   7c 00         	DW	007CH
+   23b5   7e 00         	DW	007EH
+   23b7   93 00         	DW	0093H
+   23b9   6a 00         	DW	006AH
+   23bb   c3 00         	DW	00C3H
+   23bd   4f 00         	DW	004FH
+   23bf   f6 00         	DW	00F6H
+   23c1   3e 00         	DW	003EH
+   23c3   db 00         	DW	00DBH
+   23c5   46 00         	DW	0046H
+   23c7   c3 00         	DW	00C3H
+   23c9   4f 00         	DW	004FH
+   23cb   ba 00         	DW	00BAH
+   23cd   53 00         	DW	0053H
+   23cf   db 00         	DW	00DBH
+   23d1   46 00         	DW	0046H
+   23d3   06 01         	DW	0106H
+   23d5   3a 00         	DW	003AH
+   23d7   4d 01         	DW	014DH
+   23d9   2d 00         	DW	002DH
+   23db   28 01         	DW	0128H
+   23dd   33 00         	DW	0033H
+   23df   06 01         	DW	0106H
+   23e1   3a 00         	DW	003AH
+   23e3   f6 00         	DW	00F6H
+   23e5   3e 00         	DW	003EH
+   23e7   28 01         	DW	0128H
+   23e9   33 00         	DW	0033H
+   23eb   86 01         	DW	0186H
+   23ed   26 00         	DW	0026H
+   23ef   74 01         	DW	0174H
+   23f1   28 00         	DW	0028H
+   23f3   28 01         	DW	0128H
+   23f5   33 00         	DW	0033H
+   23f7   4d 01         	DW	014DH
+   23f9   2d 00         	DW	002DH
+   23fb   79 03         	DW	0379H
+   23fd   33 00         	DW	0033H
+   23ff   3a 01         	DW	013AH
+   2401   30 00         	DW	0030H
+   2403   4d 01         	DW	014DH
+   2405   2d 00         	DW	002DH
+   2407   28 01         	DW	0128H
+   2409   33 00         	DW	0033H
+   240b   06 01         	DW	0106H
+   240d   3a 00         	DW	003AH
+   240f   28 01         	DW	0128H
+   2411   33 00         	DW	0033H
+   2413   06 01         	DW	0106H
+   2415   3a 00         	DW	003AH
+   2417   f6 00         	DW	00F6H
+   2419   3e 00         	DW	003EH
+   241b   db 00         	DW	00DBH
+   241d   46 00         	DW	0046H
+   241f   c3 00         	DW	00C3H
+   2421   4f 00         	DW	004FH
+   2423   ba 00         	DW	00BAH
+   2425   53 00         	DW	0053H
+   2427   c3 00         	DW	00C3H
+   2429   4f 00         	DW	004FH
+   242b   ba 00         	DW	00BAH
+   242d   53 00         	DW	0053H
+   242f   a5 00         	DW	00A5H
+   2431   5e 00         	DW	005EH
+   2433   93 00         	DW	0093H
+   2435   6a 00         	DW	006AH
+   2437   83 00         	DW	0083H
+   2439   77 00         	DW	0077H
+   243b   7c 00         	DW	007CH
+   243d   7e 00         	DW	007EH
+   243f   93 00         	DW	0093H
+   2441   6a 00         	DW	006AH
+   2443   c3 00         	DW	00C3H
+   2445   4f 00         	DW	004FH
+   2447   f6 00         	DW	00F6H
+   2449   3e 00         	DW	003EH
+   244b   06 01         	DW	0106H
+   244d   3a 00         	DW	003AH
+   244f   db 00         	DW	00DBH
+   2451   46 00         	DW	0046H
+   2453   0c 03         	DW	030CH
+   2455   4f 00         	DW	004FH
+   2457   a4 00         	DW	00A4H
+   2459   3e 00         	DW	003EH
+   245b   92 00         	DW	0092H
+   245d   46 00         	DW	0046H
+   245f   82 00         	DW	0082H
+   2461   4f 00         	DW	004FH
+   2463   ba 00         	DW	00BAH
+   2465   53 00         	DW	0053H
+   2467   db 00         	DW	00DBH
+   2469   46 00         	DW	0046H
+   246b   0d 02         	DW	020DH
+   246d   3a 00         	DW	003AH
+   246f   af 00         	DW	00AFH
+   2471   3a 00         	DW	003AH
+   2473   a4 00         	DW	00A4H
+   2475   3e 00         	DW	003EH
+   2477   92 00         	DW	0092H
+   2479   46 00         	DW	0046H
+   247b   c3 00         	DW	00C3H
+   247d   4f 00         	DW	004FH
+   247f   f6 00         	DW	00F6H
+   2481   3e 00         	DW	003EH
+   2483   51 02         	DW	0251H
+   2485   33 00         	DW	0033H
+   2487   c6 00         	DW	00C6H
+   2489   33 00         	DW	0033H
+   248b   af 00         	DW	00AFH
+   248d   3a 00         	DW	003AH
+   248f   a4 00         	DW	00A4H
+   2491   3e 00         	DW	003EH
+   2493   db 00         	DW	00DBH
+   2495   46 00         	DW	0046H
+   2497   06 01         	DW	0106H
+   2499   3a 00         	DW	003AH
+   249b   9b 02         	DW	029BH
+   249d   2d 00         	DW	002DH
+   249f   74 01         	DW	0174H
+   24a1   53 00         	DW	0053H
+   24a3   0c 03         	DW	030CH
+   24a5   4f 00         	DW	004FH
+   24a7   f6 00         	DW	00F6H
+   24a9   3e 00         	DW	003EH
+   24ab   14 01         	DW	0114H
+   24ad   37 00         	DW	0037H
+   24af   28 01         	DW	0128H
+   24b1   33 00         	DW	0033H
+   24b3   14 01         	DW	0114H
+   24b5   37 00         	DW	0037H
+   24b7   28 01         	DW	0128H
+   24b9   33 00         	DW	0033H
+   24bb   14 01         	DW	0114H
+   24bd   37 00         	DW	0037H
+   24bf   28 01         	DW	0128H
+   24c1   33 00         	DW	0033H
+   24c3   14 01         	DW	0114H
+   24c5   37 00         	DW	0037H
+   24c7   28 01         	DW	0128H
+   24c9   33 00         	DW	0033H
+   24cb   74 01         	DW	0174H
+   24cd   28 00         	DW	0028H
+   24cf   4d 01         	DW	014DH
+   24d1   2d 00         	DW	002DH
+   24d3   28 01         	DW	0128H
+   24d5   33 00         	DW	0033H
+   24d7   14 01         	DW	0114H
+   24d9   37 00         	DW	0037H
+   24db   f6 00         	DW	00F6H
+   24dd   3e 00         	DW	003EH
+   24df   db 00         	DW	00DBH
+   24e1   46 00         	DW	0046H
+   24e3   d0 00         	DW	00D0H
+   24e5   4a 00         	DW	004AH
+   24e7   db 00         	DW	00DBH
+   24e9   46 00         	DW	0046H
+   24eb   d0 00         	DW	00D0H
+   24ed   4a 00         	DW	004AH
+   24ef   db 00         	DW	00DBH
+   24f1   46 00         	DW	0046H
+   24f3   d0 00         	DW	00D0H
+   24f5   4a 00         	DW	004AH
+   24f7   db 00         	DW	00DBH
+   24f9   46 00         	DW	0046H
+   24fb   e8 00         	DW	00E8H
+   24fd   42 00         	DW	0042H
+   24ff   f6 00         	DW	00F6H
+   2501   3e 00         	DW	003EH
+   2503   db 00         	DW	00DBH
+   2505   46 00         	DW	0046H
+   2507   c3 00         	DW	00C3H
+   2509   4f 00         	DW	004FH
+   250b   ba 00         	DW	00BAH
+   250d   53 00         	DW	0053H
+   250f   a5 00         	DW	00A5H
+   2511   5e 00         	DW	005EH
+   2513   9b 00         	DW	009BH
+   2515   64 00         	DW	0064H
+   2517   a5 00         	DW	00A5H
+   2519   5e 00         	DW	005EH
+   251b   9b 00         	DW	009BH
+   251d   64 00         	DW	0064H
+   251f   a5 00         	DW	00A5H
+   2521   5e 00         	DW	005EH
+   2523   9b 00         	DW	009BH
+   2525   64 00         	DW	0064H
+   2527   a5 00         	DW	00A5H
+   2529   5e 00         	DW	005EH
+   252b   ba 00         	DW	00BAH
+   252d   53 00         	DW	0053H
+   252f   db 00         	DW	00DBH
+   2531   46 00         	DW	0046H
+   2533   c3 00         	DW	00C3H
+   2535   4f 00         	DW	004FH
+   2537   ba 00         	DW	00BAH
+   2539   53 00         	DW	0053H
+   253b   a5 00         	DW	00A5H
+   253d   5e 00         	DW	005EH
+   253f   93 00         	DW	0093H
+   2541   6a 00         	DW	006AH
+   2543   8b 00         	DW	008BH
+   2545   70 00         	DW	0070H
+   2547   93 00         	DW	0093H
+   2549   6a 00         	DW	006AH
+   254b   8b 00         	DW	008BH
+   254d   70 00         	DW	0070H
+   254f   93 00         	DW	0093H
+   2551   6a 00         	DW	006AH
+   2553   8b 00         	DW	008BH
+   2555   70 00         	DW	0070H
+   2557   4b 02         	DW	024BH
+   2559   6a 00         	DW	006AH
+   255b   28 01         	DW	0128H
+   255d   33 00         	DW	0033H
+   255f   4d 01         	DW	014DH
+   2561   2d 00         	DW	002DH
+   2563   5c 01         	DW	015CH
+   2565   2b 00         	DW	002BH
+   2567   d0 00         	DW	00D0H
+   2569   4a 00         	DW	004AH
+   256b   db 00         	DW	00DBH
+   256d   46 00         	DW	0046H
+   256f   f6 00         	DW	00F6H
+   2571   3e 00         	DW	003EH
+   2573   06 01         	DW	0106H
+   2575   3a 00         	DW	003AH
+   2577   28 01         	DW	0128H
+   2579   33 00         	DW	0033H
+   257b   3a 01         	DW	013AH
+   257d   30 00         	DW	0030H
+   257f   ba 00         	DW	00BAH
+   2581   53 00         	DW	0053H
+   2583   c3 00         	DW	00C3H
+   2585   4f 00         	DW	004FH
+   2587   db 00         	DW	00DBH
+   2589   46 00         	DW	0046H
+   258b   e8 00         	DW	00E8H
+   258d   42 00         	DW	0042H
+   258f   06 01         	DW	0106H
+   2591   3a 00         	DW	003AH
+   2593   28 01         	DW	0128H
+   2595   33 00         	DW	0033H
+   2597   db 00         	DW	00DBH
+   2599   46 00         	DW	0046H
+   259b   e8 00         	DW	00E8H
+   259d   42 00         	DW	0042H
+   259f   ba 00         	DW	00BAH
+   25a1   53 00         	DW	0053H
+   25a3   c3 00         	DW	00C3H
+   25a5   4f 00         	DW	004FH
+   25a7   8b 00         	DW	008BH
+   25a9   70 00         	DW	0070H
+   25ab   4b 02         	DW	024BH
+   25ad   6a 00         	DW	006AH
+   25af   93 00         	DW	0093H
+   25b1   6a 00         	DW	006AH
+   25b3   83 00         	DW	0083H
+   25b5   77 00         	DW	0077H
+   25b7   7c 00         	DW	007CH
+   25b9   7e 00         	DW	007EH
+   25bb   93 00         	DW	0093H
+   25bd   6a 00         	DW	006AH
+   25bf   c3 00         	DW	00C3H
+   25c1   4f 00         	DW	004FH
+   25c3   f6 00         	DW	00F6H
+   25c5   3e 00         	DW	003EH
+   25c7   db 00         	DW	00DBH
+   25c9   46 00         	DW	0046H
+   25cb   c3 00         	DW	00C3H
+   25cd   4f 00         	DW	004FH
+   25cf   ba 00         	DW	00BAH
+   25d1   53 00         	DW	0053H
+   25d3   db 00         	DW	00DBH
+   25d5   46 00         	DW	0046H
+   25d7   06 01         	DW	0106H
+   25d9   3a 00         	DW	003AH
+   25db   4d 01         	DW	014DH
+   25dd   2d 00         	DW	002DH
+   25df   28 01         	DW	0128H
+   25e1   33 00         	DW	0033H
+   25e3   06 01         	DW	0106H
+   25e5   3a 00         	DW	003AH
+   25e7   f6 00         	DW	00F6H
+   25e9   3e 00         	DW	003EH
+   25eb   28 01         	DW	0128H
+   25ed   33 00         	DW	0033H
+   25ef   86 01         	DW	0186H
+   25f1   26 00         	DW	0026H
+   25f3   74 01         	DW	0174H
+   25f5   28 00         	DW	0028H
+   25f7   28 01         	DW	0128H
+   25f9   33 00         	DW	0033H
+   25fb   4d 01         	DW	014DH
+   25fd   2d 00         	DW	002DH
+   25ff   79 03         	DW	0379H
+   2601   33 00         	DW	0033H
+   2603   3a 01         	DW	013AH
+   2605   30 00         	DW	0030H
+   2607   4d 01         	DW	014DH
+   2609   2d 00         	DW	002DH
+   260b   28 01         	DW	0128H
+   260d   33 00         	DW	0033H
+   260f   06 01         	DW	0106H
+   2611   3a 00         	DW	003AH
+   2613   28 01         	DW	0128H
+   2615   33 00         	DW	0033H
+   2617   06 01         	DW	0106H
+   2619   3a 00         	DW	003AH
+   261b   f6 00         	DW	00F6H
+   261d   3e 00         	DW	003EH
+   261f   db 00         	DW	00DBH
+   2621   46 00         	DW	0046H
+   2623   c3 00         	DW	00C3H
+   2625   4f 00         	DW	004FH
+   2627   ba 00         	DW	00BAH
+   2629   53 00         	DW	0053H
+   262b   c3 00         	DW	00C3H
+   262d   4f 00         	DW	004FH
+   262f   ba 00         	DW	00BAH
+   2631   53 00         	DW	0053H
+   2633   a5 00         	DW	00A5H
+   2635   5e 00         	DW	005EH
+   2637   93 00         	DW	0093H
+   2639   6a 00         	DW	006AH
+   263b   83 00         	DW	0083H
+   263d   77 00         	DW	0077H
+   263f   7c 00         	DW	007CH
+   2641   7e 00         	DW	007EH
+   2643   93 00         	DW	0093H
+   2645   6a 00         	DW	006AH
+   2647   c3 00         	DW	00C3H
+   2649   4f 00         	DW	004FH
+   264b   f6 00         	DW	00F6H
+   264d   3e 00         	DW	003EH
+   264f   06 01         	DW	0106H
+   2651   3a 00         	DW	003AH
+   2653   db 00         	DW	00DBH
+   2655   46 00         	DW	0046H
+   2657   0c 03         	DW	030CH
+   2659   4f 00         	DW	004FH
+   265b   a4 00         	DW	00A4H
+   265d   3e 00         	DW	003EH
+   265f   92 00         	DW	0092H
+   2661   46 00         	DW	0046H
+   2663   82 00         	DW	0082H
+   2665   4f 00         	DW	004FH
+   2667   ba 00         	DW	00BAH
+   2669   53 00         	DW	0053H
+   266b   db 00         	DW	00DBH
+   266d   46 00         	DW	0046H
+   266f   0d 02         	DW	020DH
+   2671   3a 00         	DW	003AH
+   2673   af 00         	DW	00AFH
+   2675   3a 00         	DW	003AH
+   2677   a4 00         	DW	00A4H
+   2679   3e 00         	DW	003EH
+   267b   92 00         	DW	0092H
+   267d   46 00         	DW	0046H
+   267f   c3 00         	DW	00C3H
+   2681   4f 00         	DW	004FH
+   2683   f6 00         	DW	00F6H
+   2685   3e 00         	DW	003EH
+   2687   51 02         	DW	0251H
+   2689   33 00         	DW	0033H
+   268b   c6 00         	DW	00C6H
+   268d   33 00         	DW	0033H
+   268f   af 00         	DW	00AFH
+   2691   3a 00         	DW	003AH
+   2693   a4 00         	DW	00A4H
+   2695   3e 00         	DW	003EH
+   2697   db 00         	DW	00DBH
+   2699   46 00         	DW	0046H
+   269b   06 01         	DW	0106H
+   269d   3a 00         	DW	003AH
+   269f   9b 02         	DW	029BH
+   26a1   2d 00         	DW	002DH
+   26a3   e8 02         	DW	02E8H
+   26a5   28 00         	DW	0028H
+   26a7   19 06         	DW	0619H
+   26a9   26 00         	DW	0026H
+   26ab   d7 03         	DW	03D7H
+   26ad   00 00         	DW	0000H
+   26af   00 00         	DW	0000H
+                        
+                        	
+   2040                 	END	START
+2041  BLANK         2048  BLOOP         2074  ILOOP         0000  IO.A      
+0001  IO.B          205e  NLOOP         2092  NOTE          2094  NOTE1     
+2091  PEXIT         205a  PLAY          2081  PNOTE         00f0  PPI       
+2072  REST          20a7  SCORE         2040  START         
+

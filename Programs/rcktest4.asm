@@ -12,14 +12,14 @@
 ;
 DLY	EQU	0053H		; 2ms delay routine
 
-PRTHEX	EQU	04B3H		; print byte in A in hex
-PRTSPC	EQU	04C7H		; print a space
-PRTCLS	EQU	04D6H		; print CR/LF then string
-PRTSTR	EQU	04D9H		; print string
-CRLF	EQU	04CCH		; print CR/LF
+PRTHEX	EQU	04C5H		; print byte in A in hex
+PRTSPC	EQU	04D9H		; print a space
+PRTCLS	EQU	04E8H		; print CR/LF then string
+PRTSTR	EQU	04EBH		; print string
+CRLF	EQU	04DEH		; print CR/LF
 
-RCK	EQU	064DH		; RCK (in minipam8)
-HORN	EQU	0284H		; HORN (in minipam8)
+RCK	EQU	0644H		; RCK (in minipam8)
+HORN	EQU	0276H		; HORN (in minipam8)
 
 	ORG	2040h		; ORG at 040.100
 	

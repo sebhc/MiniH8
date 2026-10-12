@@ -1,0 +1,2724 @@
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	MiniPAM8 - monitor for H8 Mini
+                        ;	Rev. 00.09.04 Beta
+                        ;
+                        ;	This is a modified version of PAM/8, originally written by Gordon
+                        ;	Letwin 50 years ago! This version is designed to support Lee Hart's
+                        ;	"H8 Mini", which incorporates some hardware modifications to simplify
+                        ;	the design and allow it to run on single-board 8085-based computer
+                        ;	approximately 3" x 6" in size. This code uses 8085-specific instructions,
+                        ;	and for timing purposes assumes a 2Mhz CPU clock rate (4Mhz resonator).
+                        ;
+                        ;	A modified version of Jon Chapman's Glitch Works Monitor GWMON-80
+                        ;	has been added to support a console monitor, serial I/O routines, and
+                        ;	an ability to load Intel Hex files.
+                        ;
+                        ;	As with the original PAM/8 this consists of a set of interrupt-time and
+                        ;	task-time routines. The interrupt-time routines service the front
+                        ;	panel (7-segment LEDs and keypad). There are two options for task-time
+                        ;	processing: 1) the front panel or 2) the GWMON console.
+                        ;
+                        ;	Key changes over PAM/8:
+                        ;	- IRQ handling limited to the 3 hardware interrupts on the
+                        ;	  H8 Mini: 2ms Clock, RTM/0 and Serial I/O.
+                        ;
+                        ;	Modified from original Heath-compatible assembly code by Herb Johnson (HRJ)
+                        ;	for use with the A85 assembler, 25 July, 2026.
+                        ;
+                        ;	Other modifications/enhancements by Glenn Roberts (GFR),
+                        ;	August-September, 2026.
+                        ;
+                        ;	Revision History:
+                        ;	0.9.00	initial beta
+                        ;	0.9.01	added interrupt-driven console input buffer
+                        ;	0.9.04  initial test version defaulting to PAM/8 MTR
+                        ;
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	Original comments from Gordon Letwin below (some no longer apply due
+                        ;	to hardware differences between the original H8 and the H8 Mini):
+                        ;
+                        ;	PAM/8 - H8 FRONT PANEL MONITOR
+                        ;
+                        ;	JGL, 05/01/76.
+                        ;
+                        ;	FOR *WINTEK* INC.
+                        ;
+                        ;	COPYRIGHT  05/1976, WINTEK CORPORATION
+                        ;	902 N. 9TH ST.
+                        ;	LAFAYETTE, IND.
+                        
+                        ;	PAM/8 - H8 FRONT PANEL MONITOR
+                        ;
+                        ;	THIS PROGRAM RESIDES (IN ROM) IN THE LOW 1024 BYTES OF THE HEATH
+                        ;	H8 COMPUTER. IT ACTUALLY CONSISTS OF TWO VIRTUALLY INDEPENDENT
+                        ;	ROUTINES: A TASK-TIME PROGRAM WHICH PROVIDES SOPHISTICATED
+                        ;	FRONT PANEL MONITOR SERVICE, AND AN INTERRUPT-TIME PROGRAM WHICH
+                        ;	PROVIDES BOTH A REAL-TIME CLOCK AND EMULATES AN EFFECTIVE
+                        ;	HARDWARE FRONT PANEL.
+                        
+                        ;	INTERRUPTS.
+                        ;
+                        ;	PAM/8 IS THE PRIMARY PROCESSOR FOR ALL INTERRUPTS.
+                        ;	THEY ARE PROCESSED AS FOLLOWS:
+                        ;
+                        ;	RST	USE
+                        ;
+                        ;	0	MASTER CLEAR. (NEVER USES FOR I/O OR RESET)
+                        ;
+                        ;	1	CLOCK INTERRUPT. NORMALLY TAKEN BY PAM/8.
+                        ;		SETTING BIT *U0.CLK* IN BYTE *MFLAG* ALLOWS
+                        ;		USER PROCESSING (VIA A JUMP THROUGH *UIVEC*).
+                        ;		UPON ENTRY OF THE USER ROUTINE, THE STACK
+                        ;		CONTAINS:
+                        ;		(STACK+0)  = RETURN ADDRESS (TO PAM/8)
+                        ;		(STACK+2)  = (STACKPTR+4)
+                        ;		(STACK+4)  = (AF)
+                        ;		(STACK+6)  = (BC)
+                        ;		(STACK+8)  = (DE)
+                        ;		(STACK+10) = (HL)
+                        ;		(STACK+12) = (PC)
+                        ;		THE USER'S ROUTINE SHOULD RETURN TO PAM/8 VIA
+                        ;		A *RET* WITHOUT ENABLING INTERRUPTS.
+                        ;
+                        ;	2	SINGLE STEP. SINGLE STEP INTERRUPTS GENERATED
+                        ;		BY PAM/8 ARE PROCESSED BY PAM/8.
+                        ;		ANY SINGLE STEP INTERRUPT RECEIVED WHEN IN
+                        ;		USER MODE CAUSES A JUMP THROUGH *UIVEC*+3.
+                        ;		STACK UPON USER ROUTINE ENTRY;
+                        ;		(STACK+0)  = (STACKPTR+12)
+                        ;		(STACK+2)  = (AF)
+                        ;		(STACK+4)  = (BC)
+                        ;		(STACK+6)  = (DE)
+                        ;		(STACK+8)  = (HL)
+                        ;		(STACK+10) = (PC)
+                        ;		THE USER'S ROUTINE SHOULD HANDLE ITS OWN RETURN
+                        ;		FROM THE INTERRUPT.
+                        ;
+                        ;
+                        ;	THE FOLLOWING INTERRUPTS ARE VECTORED DIRECTLY THROUGH *UIVEC*.
+                        ;	THE USER ROUTINE MUST HAVE SETUP A JUMP IN *UIVEC* BEFORE ANY
+                        ;	OF THESE INTERRUPTS MAY OCCUR.
+                        ;
+                        ;	3	I/O 3. CAUSES A DIRECT JUMP THROUGH *UIVEC*+6
+                        ;
+                        ;	4	I/O 4. CAUSES A DIRECT JUMP THROUGH *UIVEC*+9
+                        ;
+                        ;	5	I/O 5. CAUSES A DIRECT JUMP THROUGH *UIVEC*+12
+                        ;
+                        ;	6	I/O 6. CAUSES A DIRECT JUMP THROUGH *UIVEC*+15
+                        ;
+                        ;	7	I/O 7. CAUSES A DIRECT JUMP THROUGH *UIVEC*+18
+                        
+                        
+                        ;		ASSEMBLY CONSTANTS
+                        
+                        ;		I/O PORTS
+                        
+   00f0                 IP.PAD	EQU	360Q		; PAD INPUT PORT
+   00f0                 OP.CTL	EQU	360Q		; CONTROL OUTPUT PORT
+   00f0                 OP.DIG	EQU	360Q		; DIGIT SELECT OUTPUT PORT
+   00f1                 OP.SEG	EQU	361Q		; SEGMENT SELECT OUTPUT PORT
+   00f9                 IP.TPC	EQU	371Q		; TAPE CONTROL IN
+   00f9                 OP.TPC	EQU	371Q		; TAPE CONTROL OUT
+   00f8                 IP.TPD	EQU	370Q		; TAPE DATA IN
+   00f8                 OP.TPD	EQU	370Q		; TAPE DATA OUT
+                        
+                        ;		ASCII CHARACTERS.
+                        
+   0016                 A.SYN	EQU	026Q		; SYNC CHARACTER
+   0002                 A.STX	EQU	002Q		; STX CHARACTER
+                        
+                        ;		FRONT PANEL HARDWARE CONTROL BITS.
+                        
+   0010                 CB.SSI	EQU	00010000B	; SINGLE STEP INTERRUPT
+   0020                 CB.MTL	EQU	00100000B	; MONITOR LIGHT
+   0040                 CB.CLI	EQU	01000000B	; CLOCK INTERRUPT ENABLE
+   0080                 CB.SPK	EQU	10000000B	; SPEAKER ENABLE
+                        
+                        ;		DISPLAY MODE FLAGS (IN *DSPMOD*)
+                        
+   0000                 DM.MR	EQU	0		; MEMORY READ
+   0001                 DM.MW	EQU	1		; MEMORY WRITE
+   0002                 DM.RR	EQU	2		; REGISTER READ
+   0003                 DM.RW	EQU	3		; REGISTER WRITE
+                        
+                        ;		MACHINE INSTRUCTIONS.
+                        
+   0076                 MI.HLT	EQU	01110110B	; HALT
+   00c9                 MI.RET	EQU	11001001B	; RETURN
+   00db                 MI.IN	EQU	11011011B	; INPUT
+   00d3                 MI.OUT	EQU	11010011B	; OUTPUT
+   003a                 MI.LDA	EQU	00111010B	; LDA
+   00e6                 MI.ANI	EQU	11100110B	; ANI
+   0011                 MI.LXID EQU	00010001B	; LXI D
+                        
+                        ;		USER OPTION BITS.
+                        ;
+                        ;		THESE BITS ARE SET IN CELL MFLAG.
+                        
+   0080                 UO.HLT	EQU	10000000B	; DISABLE HALT PROCESSING
+   0040                 UO.NFR	EQU	CB.CLI		; NO REFRESH OF FRONT PANEL
+   0002                 UO.DDU	EQU	00000010B	; DISABLE DISPLAY UPDATE
+   0001                 UI.CLK	EQU	00000001B	; ALLOW CLOCK INTERRUPT PROCESSING
+                        
+                        ;
+                        ;	H8 Mini equates
+                        ;
+                        ;	8255 PPI at 0F0-0F3
+                        ;
+   00f0                 PPI	EQU	0F0H
+   0000                 IO.A	EQU	0
+   0001                 IO.B	EQU	1
+   0002                 IO.C	EQU	2
+   0003                 CTRL	EQU	3
+                        
+   0010                 KNUM	EQU	00010000B	; PC4
+   0020                 KMATH	EQU	00100000B	; PC5
+   0040                 KR	EQU	01000000B	; PC6
+   0080                 K0	EQU	10000000B	; PC7
+                        
+                        ;
+                        ;	Equates used by GWMON
+                        ;
+                        ;	ASCII Equates
+                        ;
+   0003                 CTLC	EQU	03
+   0008                 BS	EQU	08
+   000a                 LF	EQU	10
+   000d                 CR	EQU	13
+                        
+   0003                 CANCEL	EQU	CTLC		; Escape/cancel character, CTRL+C
+   000d                 NEXTLOC	EQU	CR		; Keystroke for next location in E
+                        				; defaults to CR
+                        				
+   8000                 STACK	equ	8000H		; Stack at top of RAM (32K for H8 Mini)
+                        
+                        ;
+                        ;	Keypad autorepeat delay (ARDLY) and debounce delay (DBDLY) in ms.
+                        ;
+   0190                 ARDLY	EQU	400
+   000a                 DBDLY	EQU	10
+                        
+                        	INCLUDE	"u8251.asm"	; DEFINE THE 8251 USART BITS
+                        ;        STL     '8251 USART BIT DEFINITIONS.'
+                        ;        EJECT
+                        	PAGE
+                        ;      8251 USART BIT DEFINITIONS.
+                        ;
+                        
+                        ;      PORT ADDRESSES
+                        
+   0000                 UDR     EQU     0               ; DATA REGISTER IS EVEN
+   0001                 USR     EQU     1               ; STATUS REGISTEP IS NEXT
+                        
+   00fa                 SC.UART EQU     372Q            ; CONSOLE USAPT ADDPESS (IFF 8251)
+                        
+                        
+                        ;      MODE INSTRUCTION CONTROL BITS.
+                        
+   0040                 UMI.1B  EQU     01000000B       ; 1 STOP BIT
+   0080                 UMI.HB  EQU     10000000B       ; 1 1/2 STOP BITS
+   00c0                 UMI.2B  EQU     11000000B       ; 2 STOP BITS
+   0020                 UMI.PE  EQU     00100000B       ; EVEN PARITY
+   0010                 UMI.PA  EQU     00010000B       ; USE PARITY
+   0000                 UMI.L5  EQU     00000000B       ; 5 BIT CHARACTERS
+   0004                 UMI.L6  EQU     00000100B       ; 6 BIT CHARACTERS
+   0008                 UMI.L7  EQU     00001000B       ; 7 BIT CHARACTERS
+   000c                 UMI.L8  EQU     00001100B       ; 8 BIT CHARACTERS
+   0001                 UMI.1X  EQU     00000001B       ; CLOCK 8 1
+   0002                 UMI.16X EQU     00000010B       ; CLOCK X 16
+   0003                 UMI.64X EQU     00000011B       ; CLOCK 8 64
+                        
+                        ;      COMMAND INSTRUCTION BITS.
+                        
+   0040                 UCI.IR  EQU     01000000B       ; INTERNAL RESET
+   0020                 UCI.RO  EQU     00100000B       ; READER-ON CONTROL FLAG
+   0010                 UCI.ER  EQU     00010000B       ; ERROR RESET
+   0004                 UCI.RE  EQU     00000100B       ; RECEIVE ENABLE
+   0002                 UCI.IE  EQU     00000010B       ; ENABLE INTERRUPTS FLAG
+   0001                 UCI.TE  EQU     00000001B       ; TRANSMIT ENABLE
+                        
+                        ;      STATUS READ COMMANB BITS.
+                        
+   0040                 USR.BD  EQU     01000000B       ; Break Detect                    /80.08.gc/
+   86a0                 USR.FE  EQU     00100000D       ; FRAMING ERROR
+   0010                 USR.OE  EQU     00010000B       ; OVERRUN ERROR
+   0008                 USR.PE  EQU     00001000B       ; PARITY ERROR
+   0004                 USR.TXE EQU     00000100B       ; TRANSMITTER EMPTY
+   0002                 USR.RXR EQU     00000010B       ; RECEIVER READY
+   0001                 USR.TXR EQU     00000001B       ; TRANSMITTER READY
+                        
+                        
+                        ;	INTERRUPT VECTORS.
+                        ;
+                        
+                        ;	LEVEL 0 - RESET
+                        ;
+                        ;	The CPU will jump here on a cold start
+                        ;
+                        ;	THIS 'INTERRUPT' MAY NOT BE PROCESSED BY A USER PROGRAM.
+                        
+   0000                 	ORG	0
+                        
+   0000   11 f9 03      INIT0	LXI	D,PRSROM	; (DE) = ROM COPY OF PRS CODE
+   0003   21 0a 20      	LXI	H,PRSRAM+PRSL-1 ; (HL) = RAM DESTINATION FOR CODE
+   0006   c3 a7 00      	JMP	INIT		; INITIALIZE
+                        ;	ERRPL	INIT-1000Q	; BYTE IN WORD 10A MUST BE 0
+                        
+   0009   4d 49 4e 49   PAMVER$	DB 'MINIPAM 00.09.04 ','B' + 80H
+   000d   50 41 4d 20   
+   0011   30 30 2e 30   
+   0015   39 2e 30 34   
+   0019   20 c2         
+                        
+                        
+                        ;	Interrupt 5.5 - caused by RTM/0 key combination
+                        ;
+                        ;	On the original H8 RTM/0 generated a level 10 
+                        ;	interrupt - basically the clock handler. The CLOCK
+                        ;	routine would test for the RTM/0 combination and
+                        ;	drop back into the monitor.
+                        ;
+                        ;	The H8 Mini has its own direct interrupt handler for the
+                        ;	RTM/0 key combo. Need to insert similar code here.
+                        ;
+                        ;	This interrupt is maskable via SIM instruction.
+                        ;
+                        ;	NOTE: In PAM-8 location 53Q is the address of DLY, a
+                        ;	general purpose delay routine. Unfortunately
+                        ;	we will have to relocate DLY because of the INT5.5
+                        ;	code.
+                        
+   002c                 	ORG	54Q
+   002c                 INT5.5	EQU	*
+   002c   fb            	EI
+   002d   c9            	RET
+                        	
+                        ;	Interrupt 6.5 - Serial I/O
+                        ;
+                        
+   0034                 	ORG	64Q
+   0034   c3 5e 00      	JMP	CINT		; jump directly to handler
+                        
+                        	
+                        ;	Interrupt 7.5 - generated by 2ms clock
+                        ;
+                        ;	Every 2ms this interrupt updates the TICCNT counter,
+                        ;	then calls Refresh Front Panel (RFP), which refreshes
+                        ;	the LED display and checks for keypad hits.
+                        ;
+   003c                 	ORG	74Q
+   003c   cd d5 00      INT7.5	CALL	SAVALL		; save user registers
+                        ;
+                        ;	We need to do nested interrupt handling here, allowing the lower
+                        ;	priority (RST 6.5) serial line IRQ to interrupt the front panel
+                        ;	refresh. Without this serial data will be lost. First enable interrupts
+                        ;	and then specifically mask out the 7.5 ones to allow lower ones in
+                        ;
+   003f   fb            	EI			; ok to interrupt us
+   0040   3e 0d         	MVI	A,00001101B	; enable RST 6.5 - serial start bit IRQ
+   0042   30            	SIM			; apply the mask
+                        
+   0043   16 00         	MVI	D,0		; needed for proper RFP execution
+   0045   c3 fd 00      	JMP	CLOCK		; process clock interrupt
+                        
+   0053                 	ORG	53H
+                        	
+                        ;	DLY - Delay time interval
+                        ;
+                        ;	This routine now lives at 053H (in PAM/8 was 053Q)
+                        ;	It is a much simplified version as HORN now done differently.
+                        ;
+                        ;	ENTRY:	(A) = (ms. delay count)/2
+                        ;
+                        ;	USES	A,F
+                        ;
+   0053   e5            DLY:	PUSH	H		; (HL) used for working storage
+   0054   21 1b 20      	LXI	H,TICCNT	; (M) = low byte of TICCNT
+   0057   86            	ADD	M		; (A) = TICCNT + count (ignore wrap around)
+                        ;
+                        ;	wait required number of tick counts. Just loop here until
+                        ;	the interrupt-driven TICCNT number matches the right number.
+                        ;
+   0058   be            DLY2:	CMP	M		; wait until ticks have passed
+   0059   c2 58 00      	JNZ	DLY2
+                        
+   005c   e1            	POP	H
+   005d   c9            	RET
+                        
+                        ;	CINT - serial I/O interrupt handler
+                        ;
+                        ;	This interrupt is triggered by a transition from low to high on the
+                        ;	SID line, which is an inverted version of the RX signal on the serial
+                        ;	input header. This transition indicates the start bit of a 10-bit sequence
+                        ;	(start bit, 8-bit data byte,and stop bit).
+                        ;
+                        ;	This handler first decodes the byte and stores it in a buffer by
+                        ;	first incrementing the buffer count and then adding the byte to the
+                        ;	tail of the buffer. The task-time code to read data can check the
+                        ;	byte count to see if there is any data in the buffer. Currently this
+                        ;	routine silently discards any overrun bytes.
+                        ;
+                        ;	Since the 2ms interrupt (RST 7.5) is a higher priority and involves
+                        ;	somewhat lengthy processing, its handler must yield for the RST 6.5
+                        ;	handler to process a byte even if it is in the middle of a clock update.
+                        ;
+                        ;	The SID and SOD pins on the Intel 8085 are used for bit-banged serial I/O.
+                        ;	The effective BAUD rate is set by fixed bit rate constants, which are used
+                        ;	to delay between bit samples. For more information consult Intel Application
+                        ;	Note AP-29, August 1977.
+                        ;
+                        ;	Quantities in angle brackets < > are T-states for each instruction
+                        ;
+   005e   f5            CINT:	PUSH	PSW
+   005f   c5            	PUSH	B
+   0060   e5            	PUSH	H
+                        ;
+                        ;	We know we have a start bit (that generated the interrupt). First
+                        ;	we delay 1/2 the bit time (HALFBIT). This puts us in the middle of the
+                        ;	start bit. Once we are thus shifted we just sample bits every BITTIME.
+                        ;	Use (C) to build the byte (not necessary to clear it as we will overwrite
+                        ;	all 8 bits). Use (B) to count the bits.
+                        ;
+   0061   06 09         	MVI	B,9		; Received bits counter
+                        ;
+                        ;	First delay one half bit time. This will put us in the
+                        ;	middle of the start bit
+                        ;
+   0063   2a 0e 04      	LHLD	HALFBIT		; <16> ; Delay one half-bit time
+   0066   2d            CI2:	DCR	L		; < 4> ;
+   0067   c2 66 00      	JNZ	CI2		; <10> ;
+   006a   25            	DCR	H		; < 4> ;
+   006b   c2 66 00      	JNZ	CI2		; <10> ;
+                        ;
+                        ;	Loop over the bits. machine cycles used = 16 + 23 + 26 + D = 65 + D per bit
+                        ;
+   006e   2a 0c 04      CI3:	LHLD	BITTIME		; <16> ; Delay one bit-time. puts us in the middle
+                        ;
+                        ;	Now delay one full bit time as we loop through the bits.
+                        ;	This will keep us in the middle of the bits for reliable sampling.
+                        ;
+   0071   2d            CI4:	DCR	L		; < 4> ;
+   0072   c2 71 00      	JNZ	CI4		; <10> ;
+   0075   25            	DCR	H		; < 4> ;
+   0076   c2 71 00      	JNZ	CI4		; <10> ;
+                        ;
+                        ;	<23> T-cycles to read the line, invert, save the bit and count down
+                        ;
+   0079   20            	RIM			; < 4> ; Read the SID line
+   007a   2f            	CMA			; < 4> ; invert it (for H8 Mini)
+   007b   17            	RAL			; < 4> ; save the bit in the CY flag
+   007c   05            	DCR	B		; < 4> ; decrement the bit counter
+   007d   ca 87 00      	JZ	CI5		; < 7> ; Stop bit, done with char receive!
+                        ;
+                        ;	<26> T-cycles to update the byte under construction
+                        ;
+   0080   79            	MOV	A,C		; < 4> ; get the byte under construction
+   0081   1f            	RAR			; < 4> ; rotate the bit into place
+   0082   4f            	MOV	C,A		; < 4> ; and save it
+   0083   00            	NOP			; < 4> ; Equalize OUT and IN loop times
+   0084   c3 6e 00      	JMP	CI3		; <10> ; Get more bits
+                        ;
+                        ;	We now have all 8 bits in (C), store the byte in the buffer
+                        ;
+   0087   21 36 20      CI5:	LXI	H,INBADDR	; (HL) = address of buffer
+   008a   cd 23 03      	CALL	$HLIHL		; (HL) = buffer
+   008d   3a 38 20      	LDA	INBLEN		; (A) = buffer length
+   0090   be            	CMP	M		; see if there's room for more
+   0091   da 99 00      	JC	CI6		; no, just ignore (should do more)
+                        ;
+                        ;	There's room to store the byte so process it
+                        ;
+   0094   34            	INR	M		; bump the count
+   0095   7e            	MOV	A,M		; fetch the count
+   0096   85            	ADD	L		; A = L + A
+   0097   6f            	MOV	L,A		; L += A; (HL) = address of character
+   0098   71            	MOV	M,C		; store the character
+                        
+   0099   e1            CI6:	POP	H
+   009a   c1            	POP	B
+   009b   f1            	POP	PSW
+   009c   fb            	EI
+   009d   c9            	RET
+                        
+                        ;	PPSROM - PPI Setup code
+                        ;
+                        ;	Here we use a trick. This is the code to initialize the configuration
+                        ;	of the 8255 PPI. There is a catch 22 here because this will momentarily
+                        ;	disable the visibility of ROM in low memory. One solution would be to
+                        ;	copy the code to RAM and execute it there, but here we use a different
+                        ;	approach. The H8 Mini mirrors the low 8K of ROM to 32K,	so the routine is
+                        ;	visible at this location plus 32K. We will store it here but call it from
+                        ;	a location 8000H higher (PPS).
+                        ;
+   009e   3e 88         PPSROM:	MVI	A,10001000B	; all bits OUT except PC4..PC7
+   00a0   d3 f3         	OUT	PPI+CTRL
+   00a2   3e 10         	MVI	A,00010000B	; make sure PA4 stays high (ROM/RAM line)
+   00a4   d3 f0         	OUT	PPI+IO.A
+   00a6   c9            	RET
+                        
+   809e                 PPS	EQU	PPSROM+8000H	; where we will actually call it from
+                        
+                        
+                        ;	INIT - initialize system
+                        ;
+                        ;	INIT is called whenever a hardware master-clear is initiated.
+                        ;
+                        ;	Setup PAM/8 control cells in RAM.
+                        ;	Setup stackpointer, and
+                        ;	enter the monitor loop.
+                        ;
+                        ;	ENTRY:	from master clear
+                        ;	EXIT:	into PAM/8 main loop
+                        ;
+                        ;	First, initalize key locations in RAM using initial
+                        ;	values stored in ROM (PRSROM). Values are copied in
+                        ;	reverse order.
+                        ;
+   00a7   1a            INIT	LDAX	D		; copying from *PRSROM* into RAM
+   00a8   77            	MOV	M,A		; move a byte
+   00a9   2b            	DCX	H		; decrement destination
+   00aa   1c            	INR	E		; increment source
+   00ab   c2 a7 00      	JNZ	INIT		; and loop 'til done
+                        ;
+                        ;	Show something interesting on the LEDs
+                        ;
+   00ae   21 1b 20      	LXI	H,FPSHOW	; address to show.
+   00b1   22 14 20      	SHLD	ABUSS		; store it
+                        ;
+                        ;	The original PAM/8 determined the top of RAM by probing
+                        ;	every 1K for live RAM and then set the stack pointer
+                        ;	there. For the H8 Mini we assume a 32K RAM space and
+                        ;	set SP there.
+                        ;
+   00b4   21 00 80      	LXI	H,STACK		; Stack at top of RAM
+   00b7   2b            INIT2:	DCX	H		; set to one minus memory limit
+   00b8   f9            	SPHL			; set SP
+   00b9   e5            	PUSH	H		; save *PC* value on stack
+   00ba   21 92 01      	LXI	H,ERROR		; ERROR = general bail out routine
+   00bd   e5            	PUSH	H		; set as 'return address'
+                        ;
+                        ;	H8 Mini-specific Initializations
+                        ;
+                        ;	Call the PPI setup code from its "shadow" location 8000H higher
+                        ;
+   00be   cd 9e 80      	CALL	PPS
+                        ;
+                        ;	Set up console serial interrupt handler values in RAM
+                        ;
+   00c1   21 39 20      	LXI	H,$INBUF	; (HL) = default input buffer
+   00c4   22 36 20      	SHLD	INBADDR		; save that location
+   00c7   af            	XRA	A		; clear serial I/O byte count
+   00c8   77            	MOV	M,A		; set byte count to 0
+   00c9   3e 01         	MVI	A,$INBUFL	; buffer length
+   00cb   32 38 20      	STA	INBLEN		; save that too
+                        ;
+                        ;	Initialize PCKVAL
+                        ;
+                        ;	MVI	A,0FFH		; 0FFH = "no key pressed"
+                        ;	STA	PCKVAL		; store it
+                        ;
+                        ;	Enable clock and console interrupts
+                        ;
+   00ce   3e 09         	MVI	A,00001001B	; enable RST 7.5 (clock) and RST 6.5 (serial)
+   00d0   30            	SIM			; apply the mask
+   00d1   fb            	EI			; globally enable interrupts
+                        	
+                        ;
+                        ;	Use GWMON as main loop while we debug things...
+                        ;
+                        ;	JMP	GWMON
+                        	
+   00d2   c3 d5 00      	JMP	SAVALL		; begin front panel monitor
+                        
+                        ;	Now just fall through to SAVALL and then return to the
+                        ;	general bailout routine ERROR.
+                        
+                        ;
+                        ;	SAVALL - save all registers on stack.
+                        ;
+                        ;	Called when an interrupt is accepted, in order to
+                        ;	save the contents of the registers on the stack.
+                        ;
+                        ;	ENTRY	called directly from the interrupt routine.
+                        ;	EXIT	all registers pushed on stack.
+                        ;		if not yet in monitor mode, REGPTR = address of registers
+                        ;		on stack.
+                        ;		(DE) = address of CTLFLG
+                        
+                        
+   00d5   e3            SAVALL	XTHL			; set H,L on stack top
+   00d6   d5            	PUSH	D
+   00d7   c5            	PUSH	B
+   00d8   f5            	PUSH	PSW
+   00d9   eb            	XCHG			; (D,E) = return address
+   00da   21 0a 00      	LXI	H,10
+   00dd   39            	DAD	SP		; (H,L) = address of users SP
+   00de   e5            	PUSH	H		; set on stack as 'register'
+   00df   d5            	PUSH	D		; set return address
+   00e0   11 09 20      	LXI	D,CTLFLG
+   00e3   1a            	LDAX	D		; (A) = CTLFLG
+   00e4   2f            	CMA
+   00e5   e6 30         	ANI	CB.MTL+CB.SSI	; save register addr if user or single-step
+   00e7   c8            	RZ			; return if was interrupt or monitor loop
+   00e8   21 02 00      	LXI	H,2
+   00eb   39            	DAD	SP		; (H,L) = address of 'STACKPTR' on stack
+   00ec   22 1d 20      	SHLD	REGPTR
+   00ef   c9            	RET
+                        ;
+                        ;	INTXID - Return to program from interrupt.
+                        ;
+   00f0   f1            INTXIT	POP	PSW		; remove fake 'stack register'
+                        ;
+                        ;	Make sure clock interrupts are enabled
+                        ;
+   00f1   20            	RIM			; Read interrupt mask
+   00f2   e6 03         	ANI	00000011B	; leave 5.5 and 6.5 alone
+   00f4   f6 08         	ORI	00001000B	; 7.5 LOW (interrupts on)
+   00f6   30            	SIM			; set new mask
+                        	
+   00f7   f1            	POP	PSW
+   00f8   c1            	POP	B
+   00f9   d1            	POP	D
+   00fa   e1            	POP	H
+   00fb   fb            	EI
+   00fc   c9            	RET
+                        ;
+                        ;	CLOCK - process clock interrupt
+                        ;
+                        ;	Entered whenever a 2 millisecond clock interrupt is
+                        ;	processed.
+                        ;
+                        ;	TICCNT is incremented every interrupt, then fall
+                        ;	through to RFP to refresh front panel and PCK to
+                        ;	probe console keypad.
+                        ;
+   00fd   2a 1b 20      CLOCK	LHLD	TICCNT
+   0100   23            	INX	H
+   0101   22 1b 20      	SHLD	TICCNT		; INCREMENT TICCOUNT
+                        
+                        ;	RFP - Refresh Front Panel (and probe keypad switches)
+                        ;
+                        ;	This code uses the 8255 PIA lines to do two things: 1) refresh the
+                        ;	front panel LEDs and 2) probe to detect front panel keypad closures.
+                        ;	This is called for every clock interrupt so it updates only one
+                        ;	7-segment LED unit at a time (working right to left).
+                        ;	The REFIND variable keeps track of the refresh index.
+                        ;
+                        ;	Since the H8 Mini makes dual purpose of the PA0..PA3 lines
+                        ;	to both select LEDS and switches, it makes sense to simultaneously
+                        ;	scan for keyswitch closures.
+                        ;
+                        ;	ENTRY: 	calling program should set (D) = 0
+                        ;
+   0104   21 08 20      RFP	LXI	H,MFLAG		; ((HL)) = MFLAG
+   0107   7e            	MOV	A,M		; (A) = current MFLAG value
+   0108   47            	MOV	B,A		; save it in (B)
+   0109   e6 40         	ANI	UO.NFR		; Test No Front Refresh bit
+   010b   23            	INX	H		; code assumes CTLFLG follows MFLAG
+                        
+   010c   7e            	MOV	A,M		; (A) = CTLFLG
+   010d   4a            	MOV	C,D		; (C) = 0 in case no panel refresh
+                        ;
+                        ;	The original PAM/8 had an ability to skip over front panel
+                        ;	refresh to save CPU time, but since the keypad scan is now
+                        ;	accomplished that way we have to be careful. For now 
+                        ;	disable this capability. We may be able to re-introduce it
+                        ;	differently later...
+                        ;
+                        ;	JNZ	CLK3		; NFR bit was set - no refresh
+                        
+   010e   23            	INX	H		; code assumes REFIND follows CTLFLG
+                        ;
+                        ;	Here (HL) points to the refresh index (REFIND). Since the front
+                        ;	panel LED pattern bytes (FPLEDS) immediately follow that location
+                        ;	they are indexed from 1 to 9. REFIND was initialized to 1 at startup.
+                        ;
+   010f   35            	DCR	M		; decrement digit index
+   0110   c2 1a 01      	JNZ	CLK2		; still positive, keep going
+                        ;
+                        ;	A little housekeeping for the upcoming keypad scan: Starting a new
+                        ;	refresh cycle. Get ready for a new round of keypad scans:
+                        ;	set PCKTMP to 0FFH
+                        ;
+   0113   3e ff         	MVI	A,0FFH		; default to return if no keys pressed
+   0115   32 35 20      	STA	PCKTMP		; after scanning all 9.
+                        	
+   0118   36 09         	MVI	M,9		; loop continuously counting down from 9
+   011a   5e            CLK2	MOV	E,M		; (DE) = index pointer to pattern
+   011b   19            	DAD	D		; ((HL)) = (M) = LED pattern
+                        ;
+                        ;	Port B controls which of the segments to light
+                        ;	(M) = pattern to send to the LED
+                        ;
+   011c   af            	XRA	A		; first zero the pattern
+   011d   d3 f1         	OUT	PPI+IO.B	; this avoids "ghosting"
+                        	
+   011f   db f0         CLK3	IN	PPI+IO.A	; read Port A status
+   0121   e6 f0         	ANI	11110000B	; clear lower 4 bits
+   0123   b3            	ORA	E		; set bits for digit to select
+   0124   d3 f0         	OUT	PPI+IO.A	; select it
+                        ;
+                        ;	Now set the segments to be lit on Port B
+                        ;
+   0126   7e            	MOV	A,M		; (A) = LED pattern from table
+   0127   d3 f1         	OUT	PPI+IO.B	; set it!
+                        ;
+                        ;	PCK - Probe Console Keypad
+                        ;
+                        ;	While we have this line selected we can probe for switch closures by
+                        ;	examining PC4..PC7. These input lines are matrixed with the various
+                        ;	key switches. If a key is pressed the appropriate value is stored in PCKTMP,
+                        ;	per the table below. PCKTMP is initally set to "no key pressed" (0FFH) when
+                        ;	the scan cycle begins.
+                        ;
+                        ;	If no key is pressed on this pass we continue scanning with next clock interrupt.
+                        ;	After 9 scans the value of PCKTMP is "published" to PCKVAL, where it can be
+                        ;	read by the RCK routine. If no key was pressed during the 9 cycles then
+                        ;	PCKVAL will be 0FFH.
+                        ;
+                        ;	Key Values to be returned in PCKVAL:
+                        ;
+                        ;	Key	  Value (decimal)
+                        ;	0-9		0-9
+                        ;	'+'		10
+                        ;	'-'		11
+                        ;	'*'		12
+                        ;	'/'		13
+                        ;	'#'		14
+                        ;	'.'		15
+                        ;     <no key>		255
+                        ;
+                        ;PCK:	LDA	PCKVAL		; see if we've already got a key value
+                        ;	ORA	A		; set flags
+                        ;	JP	PCKX		; PCKVAL has key value waiting to be read, exit
+                        ;
+                        ;	PCKVAL has 0FFH so we're waiting for a key press
+                        ;
+   0129   c5            PCK:	PUSH	B		; using B for scratch
+                        ;
+                        ;	PC4..PC7 are four input lines on the PPI chip that are matrixed
+                        ;	with the various switches.
+                        ;
+                        ;	PC4	KNUM	Active "low"; Number [1..9]
+                        ;	PC5	KMATH	Active "low"; '.', '*', '-', '+'
+                        ;	PC6	KR	Active "high";'/' (RST)
+                        ;	PC7	K0	Active "high", '0'
+                        ;
+   012a   db f2         	IN	PPI+IO.C	; read PC4..PC7
+   012c   ee 30         	XRI	00110000B	; make all signals "active high"
+   012e   47            	MOV	B,A		; keep a copy
+   012f   e6 40         	ANI	KR		; check for '/'
+   0131   c2 6b 01      	JNZ	PCKR		; pressed, jump
+                        	
+   0134   78            	MOV	A,B		; restore reading
+   0135   e6 80         	ANI	K0		; check for '0'
+   0137   c2 70 01      	JNZ	PCKZ		; pressed, jump
+                        	
+   013a   78            	MOV	A,B		; restore reading
+   013b   e6 10         	ANI	KNUM		; check for [1..9]
+   013d   c2 74 01      	JNZ	PCKN
+                        	
+   0140   78            	MOV	A,B		; restore reading
+   0141   e6 20         	ANI	KMATH		; check for '.', '*', '-', '+'
+   0143   ca 7b 01      	JZ	PCKQ		; no match to any, skip to end
+                        ;
+                        ;	A "math" key pressed ('#', '.', '*', '-' or '+')
+                        ;
+                        ;	First we need to test whether this came from the SM ('#')
+                        ;	switch. To test that we need to momentarily turn off all refresh
+                        ;	lines (LED segments will briefly extinguish).
+                        ;
+   0146   db f0         PCKM:	IN	PPI+IO.A	; read Port A status
+   0148   4f            	MOV	C,A		; save it (for restoration later)
+   0149   e6 f0         	ANI	11110000B	; clear refresh lines
+   014b   d3 f0         	OUT	PPI+IO.A	; turn off all lines
+   014d   db f2         	IN	PPI+IO.C	; re-read the inputs
+   014f   47            	MOV	B,A		; save it
+                        ;
+                        ;	now immediately turn the LEDs back on (hopefully nobody noticed!)
+                        ;	
+   0150   79            	MOV	A,C		; get back desired line state
+   0151   d3 f0         	OUT	PPI+IO.A	; select it
+                        	
+   0153   78            	MOV	A,B		; now let's see if KMATH was asserted
+   0154   e6 20         	ANI	KMATH		; (remember "low" = key pressed)
+   0156   c2 5e 01      	JNZ	PCKM1		; "high" -> no key pressed (not SM)
+   0159   3e 0e         	MVI	A,14		; "low" -> SM ('#') key was pressed
+   015b   c3 78 01      	JMP	PCK1		; done!
+                        ;
+                        ;	Set key value according to original PAM/8 scheme:
+                        ; E = 1:	'.'	15
+                        ; E = 2:	'*'	12
+                        ; E = 3:	'-'	11
+                        ; E = 4:	'+'	10
+                        ;
+                        ; for E = 2, 3 or 4 just subtract from 14. E = 1 is special case
+                        ;
+   015e   3e 0e         PCKM1:	MVI	A,14
+   0160   93            	SUB	E		; A = 14 - (E)
+   0161   fe 0d         	CPI	13		; 13 should be 15
+   0163   da 78 01      	JC	PCK1		; <13 is OK
+   0166   c6 02         	ADI	2		; make the adjustment
+   0168   c3 78 01      	JMP	PCK1
+                        ;
+                        ;	RST ('/') pressed
+                        ;
+   016b   3e 0d         PCKR:	MVI	A,13		; '/' = 13
+   016d   c3 78 01      	JMP	PCK1		; done
+                        ;
+                        ;	'0' pressed
+                        ;
+   0170   af            PCKZ:	XRA	A		; '0' = 0
+   0171   c3 78 01      	JMP	PCK1		; done
+                        ;
+                        ;	'1' through '9' pressed
+                        ;
+   0174   7b            PCKN:	MOV	A,E		; return the scan number
+   0175   c3 78 01      	JMP	PCK1		; done
+                        ;
+                        ;	Come here with (A) = keycode if key press was detected
+                        ;
+   0178   32 35 20      PCK1:	STA	PCKTMP		; save the key value
+                        
+                        
+   017b   c1            PCKQ:	POP	B		; restore B, and done ...
+   017c   1d            	DCR	E		; set 'Z' flag
+   017d   c2 86 01      	JNZ	PCKX		; not done yet
+                        ;
+                        ;	Done with 9 scans, move "temp" value to actual
+                        ;
+   0180   3a 35 20      	LDA	PCKTMP		; load our scratch copy
+   0183   32 34 20      	STA	PCKVAL		; make it official
+                        ;
+                        ;	End of keypad processing
+                        ;
+   0186                 PCKX	EQU	*
+                        ;
+                        ;	See if time to decode display values
+                        ;
+   0186   21 1b 20      	LXI	H,TICCNT	; check the clock
+   0189   7e            	MOV	A,M		; low byte only
+   018a   e6 1f         	ANI	31		; multiple of 32?
+                        ;
+                        ;	every 32 interrupts update the front panel and
+                        ;	check for key presses
+                        ;
+   018c   cc e4 02      	CZ	UFD		; Update front panel display
+                        ;
+                        ;	Exit clock interrupt
+                        ;
+                        ;	For now simply exit here. Code that follows is to handle
+                        ;	processing of HLT instructions
+                        ;
+   018f   c3 f0 00      	JMP	INTXIT
+                        
+                        
+                        ;	LXI	B,CTLFLG
+                        ;	LDAX	B		; (A) = CTLFLG
+                        ;	ANI	CB.MTL
+                        ;	JNZ	INTXIT		; IF IN MONITOR CODE
+                        ;	DCX	B
+                        ;	ERRNZ	CTLFLG-MFLAG-1	; code assumes CTLFLG follows MFLAG
+                        ;	LDAX	B		; (A) = MFLAG
+                        ;	ERRNZ	UO.HLT-200Q	; ASSUME HIGH-ORDER
+                        ;	RAL
+                        ;	JC	CLK4		; SKIP IT
+                        
+                        ;	NOT IN MONITOR MODE, CHECK FOR HALT
+                        
+                        ;	MVI	A,10		; (A) = INDEX OF *P* REG
+                        ;	CALL	LRA.		; LOCATE REGISTER ADDRESS
+                        ;	MOV	E,M
+                        ;	INX	H
+                        ;	MOV	D,M		; (D,E) = PC CONTENTS
+                        ;	DCX	D
+                        ;	LDAX	D
+                        ;	CPI	MI.HLT		; CHECK FOR HALT
+                        ;	JZ	ERROR		; IF HALT, BE IN MONITOR MODE
+                        
+                        ;	CHECK FOR 'RETURN TO MONITOR' KEY ENTRY.
+                        ;CLK4	EQU	*
+                        ;	 IN	 IP.PAD
+                        ;	 CPI	 56Q		 ; SEE IF '0' AND '#'
+                        ;	 JNZ	 CUI1		 ; IF NOT, ALLOW USER PROCESSING OF CLOCK
+                        
+                        ;	ERROR - Command error or general bail out
+                        ;
+                        ;	Error is called as a 'bail-out' routine.
+                        ;
+                        ;	It resets the operational mode, and restores the stackpointer.
+                        ;
+                        ;	ENTRY	NONE
+                        ;	EXIT	TO MTR LOOP
+                        ;		CTLFLG SET
+                        ;		MFLAG CLEARED
+                        ;	USES	ALL
+                        
+   0192   21 08 20      ERROR:	LXI	H,MFLAG
+   0195   7e            	MOV	A,M		; (A) = MFLAG
+   0196   e6 bd         	ANI	377Q-UO.DDU-UO.NFR ; Re-enable displays
+   0198   77            	MOV	M,A		; replace
+   0199   23            	INX	H		; next point to CTLFLG
+   019a   36 f0         	MVI	M,CB.SSI+CB.MTL+CB.CLI+CB.SPK ; Restore *CTLFLG*
+                        ;	ERRNZ	CTLFLG-MFLAG-1	; code assumes CTLFLG follows MFLAG
+   019c   fb            	EI
+   019d   2a 1d 20      	LHLD	REGPTR
+   01a0   f9            	SPHL			; Restore stack pointer to empty state
+   01a1   cd 72 02      	CALL	ALARM		; Alarm for 200 ms
+                        ;	JMP	MTR
+                        
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	MTR - Monitor Loop.
+                        ;
+                        ;	This is the main executive loop for the front panel emulator.
+                        ;
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+   01a4   fb            MTR:	EI
+                        
+   01a5   21 a5 01      MTR1:	LXI	H,MTR1		; set top of the monitor loop
+   01a8   e5            	PUSH	H		; as return address
+   01a9   01 07 20      	LXI	B,DSPMOD	; (BC) = #DSPMOD
+   01ac   0a            	LDAX	B		; (A) = DSPMOD
+   01ad   e6 01         	ANI	1		; (A) = 1 if in alter mode
+                        ;	CMA			; disable CMA - H8 Mini uses opposite sense
+   01af   32 06 20      	STA	DSPROT		; rotate LED periods if alter
+                        ;
+                        ;	Read a key from the keypad and take appropriate action
+                        ;
+   01b2   cd 48 06      	CALL	RCK		; read console keypad
+   01b5   2a 14 20      	LHLD	ABUSS		; (HL) = ABUSS
+   01b8   fe 0a         	CPI	10		; test for [0..9]
+   01ba   d2 c4 01      	JNC	MTR4		; everything else is "always valid"
+   01bd   5f            	MOV	E,A		; save RCK result
+   01be   0a            	LDAX	B		; (A) = DSPMOD
+   01bf   0f            	RRC			; move low bit to CY
+   01c0   da e8 01      	JC	MTR5		; if in alter mode
+   01c3   7b            	MOV	A,E		; (A) = code
+                        ;
+                        ;	"Always Valid": have a command (not a value)
+                        ;
+   01c4   d6 04         MTR4	SUI	4		; Offset so "Go" is zero
+   01c6   da 92 01      	JC	ERROR		; if bad
+   01c9   5f            	MOV	E,A		; save it
+   01ca   e5            	PUSH	H		; save ABUSS value
+   01cb   21 dc 01      	LXI	H,MTRA		; point to dispatch table
+   01ce   16 00         	MVI	D,0		; (DE) = offset
+   01d0   19            	DAD	D		; (HL) = address of table entry
+   01d1   5e            	MOV	E,M		; (DE) = offset to processor
+   01d2   19            	DAD	D		; (HL) = address of processor
+                        ;
+                        ;	Prepare to dispatch to processor. Put dispatch address on the
+                        ;	stack (RET will jump there), point DE to REG Index, set
+                        ;	'Z' if memory and load A with DSPMOD
+                        ;
+   01d3   e3            	XTHL			; set address, (HL) = (ABUSS)
+   01d4   11 05 20      	LXI	D,REGI		; (DE) = address of reg index
+   01d7   0a            	LDAX	B		; (A) = DSPMOD
+   01d8   e6 02         	ANI	2		; set 'Z' if memory
+   01da   0a            	LDAX	B		; (A) = DSPMOD
+   01db   c9            	RET			; jump to processor
+                        ;
+                        ;	Command dispatch table (NOTE single byte offsets so
+                        ;	it is important that the dispatch routine not be farther away than
+                        ;	256 bytes)
+                        ;
+   01dc   75            MTRA:	DB	GO-$		; 4 - go
+   01dd   61            	DB	IN- $		; 5 - input
+   01de   63            	DB	OUT-$		; 6 - output
+   01df   47            	DB	ABORT-$		; 7 - single step (N/A
+   01e0   46            	DB	ABORT-$		; 8 - cassette load (N/A)
+   01e1   45            	DB	ABORT-$		; 9 - cassette dump (N/A)
+   01e2   37            	DB	NEXT-$		; + - next
+   01e3   44            	DB	LAST-$		; - - last
+   01e4   42            	DB	ABORT-$		; * - abort
+   01e5   30            	DB	RW-$		; / - display/alter
+   01e6   4e            	DB	MEMM-$		; # - memory mode
+   01e7   1c            	DB	REGM-$		; . - register mode
+                        
+                        ;	Process memory/register alterations.
+                        ;
+                        ;	This code is entered if
+                        ;
+                        ;	1) we are in alter mode, and
+                        ;	2) a key from 0-7 was entered.
+                        
+   01e8   0f            MTR5	RRC
+   01e9   7b            	MOV	A,E		; (A) = U
+   01ea   da f6 01      	JC	MTR6		; is register
+   01ed   37            	STC			; indicate 1st digit is in (A)
+   01ee   cd a9 02      	CALL	IOB		; input octal byte
+   01f1   23            	INX	H		; display next location
+                        
+                        ;	SAE - Store ABUSS and exit.
+                        ;
+                        ;	ENTRY:	(HL) = ABUSS value
+                        ;	EXIT:	to (RET)
+                        ;	USES:	NONE
+                        ;
+   01f2   22 14 20      SAE	SHLD	ABUSS
+   01f5   c9            	RET
+                        ;
+                        ;	alter register
+                        ;
+   01f6   f5            MTR6	PUSH	PSW		; save code
+   01f7   cd 9a 02      	CALL	LRA		; locate register address
+   01fa   a7            	ANA	A
+   01fb   ca 92 01      	JZ	ERROR		; not allowed to alter stackpointer
+   01fe   23            	INX	H
+   01ff   f1            	POP	PSW		; restore value and carry flag
+   0200   c3 a5 02      	JMP	IOA		; input octal address
+                        ;
+                        ;	REGM - enter register display mode.
+                        ;
+                        ;	ENTRY:	(A) = DSPMOD
+                        ;		(BC) = #DSPMOD
+                        ;
+   0203   3e 02         REGM	MVI	A,00000010B	; Set display to register mode
+   0205   02            	STAX	B		; set display register mode
+                        ;	ERRNZ	DSPMOD-DSPROT-1	; code assumesDSPMOD follows DSPROT
+   0206   0b            	DCX	B		; (BC) = #DSPROT
+   0207   af            	XRA	A
+                        ;	CMA			; H8 Mini uses '1' for LED segment on - gfr
+   0208   02            	STAX	B		; set all periods on
+   0209   cd 48 06      	CALL	RCK		; read key entry
+   020c   3d            	DCR	A		; displace
+   020d   fe 06         	CPI	6
+   020f   d2 92 01      	JNC	ERROR		; not 1-6
+   0212   07            	RLC
+   0213   12            	STAX	D		; set new reg ind
+   0214   c9            	RET
+                        
+                        ;	RW - toggle display/alter mode.
+                        ;
+                        ;	ENTRY	(A) = DSPMOD
+                        ;		(BC) = ADDRESS OF DSPMOD
+                        
+   0215   ee 01         RW	XRI	1
+   0217   02            	STAX	B
+   0218   c9            	RET
+                        
+                        ;	NEXT - Increment display element
+                        ;
+                        ;	ENTRY	(HL) = (ABUSS)
+                        ;		(DE) = address of REGIND
+                        ;
+   0219   23            NEXT	INX	H
+   021a   ca f2 01      	JZ	SAE		; if memory, store values and exit
+                        ;
+                        ;	Is register mode.
+                        ;
+   021d   1a            	LDAX	D		; (A) = REGI
+   021e   c6 02         	ADI	2		; increment register index
+   0220   12            	STAX	D		; wrap to *SP*
+   0221   fe 0c         	CPI	12
+   0223   d8            	RC			; if not too large, exit
+   0224   af            	XRA	A		; overflow
+   0225   12            	STAX	D
+   0226   c9            ABORT	RET
+                        
+                        ;	LAST - Increment display element
+                        ;
+                        ;	ENTRY	(HL) = (ABUSS)
+                        ;		(DE) = address of REGIND
+                        ;
+   0227   2b            LAST	DCX	H
+   0228   ca f2 01      	JZ	SAE		; if memory, store and exit
+                        ;
+                        ;	Is register mode
+                        ;
+   022b   1a            LST2	LDAX	D		; (A) = REGI
+   022c   d6 02         	SUI	2
+   022e   12            	STAX	D
+   022f   d0            	RNC			; If OK
+   0230   3e 0a         	MVI	A,10		; Underflow to *PC*
+   0232   12            	STAX	D
+   0233   c9            	RET
+                        ;
+                        ;	MEMM - Enter display memory mode
+                        ;
+                        ;	ENTRY	(BC) = Address of DSPMOD
+                        ;
+   0234   af            MEMM	XRA	A		; (A) = 0
+   0235   02            	STAX	B		; set display memory mode
+                        ;	ERRNZ	DSPMOD-DSPROT-1	; code assumes DSPMOD follows DSPROT
+   0236   0b            	DCX	B		; (BC) = #DSPROT
+                        ;	CMA			; H8 Mini uses '1' for 
+   0237   02            	STAX	B		; set all periods on
+   0238   21 15 20      	LXI	H,ABUSS+1
+   023b   c3 a5 02      	JMP	IOA		; input octal address
+                        
+                        ;	IN - Input a data byte
+                        ;
+                        ;	OUT - Output a data byte
+                        ;
+                        ;	ENTRY:	(HL) = (ABUSS)
+                        ;		(H) = value (for OUT)
+                        ;		(L) = port
+                        ;
+                        ;	EXIT:	ABUSS updated
+                        ;		(A) = value (for IN)
+                        ;
+   023e   06 db         IN	MVI	B,MI.IN		; Store the IN instruction in RAM
+   0240   11            	DB	MI.LXID		; clever trick (skip over 'OUT' if doing 'IN')
+   0241   06 d3         OUT	MVI	B,MI.OUT	; store the OUT instruction in RAM
+   0243   7c            	MOV	A,H		; (A) = value
+   0244   65            	MOV	H,L		; (H) = port
+   0245   68            	MOV	L,B		; (L) = IN/OUT instruction
+   0246   22 02 20      	SHLD	IOWRK		; Store instruction and port
+   0249   cd 02 20      	CALL	IOWRK		; do the actual I/O call
+   024c   6c            	MOV	L,H		; (L) = port
+   024d   67            	MOV	H,A		; (H) = value
+   024e   c3 f2 01      	JMP	SAE		; store ABUSS and exit
+                        ;
+                        ;	GO - return to user mode
+                        ;
+                        ;	ENTRY	NONE
+                        
+   0251   3e d0         GO	MVI     A,CB.SSI+CB.CLI+CB.SPK ; off monitor mode light
+   0253   c3 5e 02              JMP     SST1            ; return to user program
+                        
+                        
+                        ;	SSTEP - SINGLE STEP INSTRUCTION
+                        ;
+                        ;	ENTRY	NONE
+                        
+   0256   f3            SSTEP:	DI			; disable interrupts until the right time
+   0257   3a 09 20      	LDA	CTLFLG
+   025a   ee 10         	XRI	CB.SSI		; clear single step inhibit
+   025c   d3 f0         	OUT	OP.CTL		; prime single step interrupt
+                        
+   025e   32 09 20      SST1	STA	CTLFLG		; set new flag values
+   0261   e1            	POP	H		; clean stack
+   0262   c3 f0 00      	JMP	INTXIT		; return to user routine for step
+                        ;
+                        ;	STPRTN - Single step return
+                        ;
+   0265   f6 10         STPRTN:	ORI	CB.SSI		; disable single step interruption
+   0267   d3 f0         	OUT	OP.CTL		; turn off single step enable
+   0269   12            	STAX	D
+   026a   e6 20         	ANI	CB.MTL		; see if in monitor mode
+   026c   c2 a4 01      	JNZ	MTR
+   026f   c3 22 20      	JMP	UIVEC+3		; transfer to user's routine
+                        ;
+                        ;	HORN - make noise
+                        ;
+                        ;	This routine works completely differently than the PAM/8
+                        ;	version. The H8 Mini has to continuously toggle the speaker to
+                        ;	generate a tone (the H8 just has to turn on/off a 1kHz square wave).
+                        ;	For best results interrupts should be disabled (2ms clock interrupts
+                        ;	will otherwise affect the sound).
+                        ;
+                        ;	To be compatible with the H8 we play "high" C (C6) at 1046.5 Hz.
+                        ;
+                        ;	ENTRY	(A) = duration (ms.)
+                        ;
+                        ;	USES	A,F
+                        ;
+   0272   3e c8         ALARM:	MVI	A,200		; 200 ms. beep
+                        
+   0274   c5            HORN:	PUSH	B		; BC used for working storage
+   0275   4f            	MOV	C,A		; C = duration
+   0276   f3            	DI			; interrupts off
+   0277   cd 24 06      	CALL	BLANK		; blank the LEDs
+                        ;
+                        ;	Set speaker to "high" state
+                        ;
+   027a   db f0         	IN	PPI+IO.A	; Read Port A settings
+   027c   e6 3f         	ANI	00111111B	; Clear top two bits (PA6-7)
+   027e   f6 80         	ORI	10000000B	; PA7 on; PA6 off
+   0280   d3 f0         	OUT	PPI+IO.A	; set speaker bits
+                        ;
+                        ;	Play the tone
+                        ;
+   0282   06 35         HDLY1:	MVI	B,53		; half period
+                        ;
+                        ;	9 uS delay loop
+                        ;
+   0284   00            HDLY2:	NOP			; 4 T-states
+   0285   05            	DCR	B		; 4 T-states
+   0286   c2 84 02      	JNZ	HDLY2		; 10 T-states
+                        ;
+                        ;	Toggle the speaker
+                        ;
+   0289   db f0         	IN	PPI+IO.A	; Read Port A settings
+   028b   ee c0         	XRI	11000000B	; toggle PA6, PA7
+   028d   d3 f0         	OUT	PPI+IO.A	; set speaker bits
+   028f   17            	RAL			; test bit 7
+   0290   da 82 02      	JC	HDLY1		; now wait the other half period
+                        	
+   0293   0d            	DCR	C		; decrement duration counter
+   0294   c2 82 02      	JNZ	HDLY1		; repeat cycle 'til done
+                        	
+   0297   fb            	EI
+   0298   c1            	POP	B
+   0299   c9            	RET
+                        
+                        
+                        ;	LRA - LOCATE REGISTER ADDRESS
+                        ;
+                        ;	ENTRY	NONE.
+                        ;	EXIT	(A) = REGISTER INDEX
+                        ;		(H,L) = STORAGE ADDRESS
+                        ;		(D,E) = (0,A)
+                        ;	USES	A,D,E,H,L,F
+                        
+   029a   3a 05 20      LRA	LDA	REGI
+   029d   5f            LRA.	MOV	E,A
+   029e   16 00         	MVI	D,0
+   02a0   2a 1d 20      	LHLD	REGPTR
+   02a3   19            	DAD	D		; (DE) = (REGPTR)+(REGI)
+   02a4   c9            	RET
+                        
+                        ;	IOA - Input Octal Number
+                        ;
+                        ;	ENTRY:	(H,L) = address of reception double byte.
+                        ;	EXIT:	To *RET* if errok
+                        ;		To *RET*+1 if OK, value in memory.
+                        ;	USES:	A,B,E,H,C,F
+                        
+   02a5   cd a9 02      IOA	CALL	IOB		; input byte
+   02a8   2b            	DCX	H
+                        
+                        ;	IOB - Input Octal Byte.
+                        ;
+                        ;	Read one octal byte from the keyset.
+                        ;
+                        ;	ENTRY:	(H,L) = Address of byte to hold value
+                        ;		'C' set if first digit in (A)
+                        ;	EXIT:	To *RET* if all OK
+                        ;		To *ERROR* if error
+                        ;	USES:	A,D,E,H,L,F
+                        
+   02a9   16 03         IOB	MVI	D,3		; (D) = digit count
+   02ab   d4 48 06      IOB1	CNC	RCK		; Read Console Keyset
+                        
+   02ae   fe 08         	CPI	8		; must be [0..7]
+   02b0   d2 92 01      	JNC	ERROR		; if illegal digit
+                        
+   02b3   5f            	MOV	E,A		; (E) = value
+   02b4   7e            	MOV	A,M		; fetch value being updated
+   02b5   07            	RLC			; shift left 3 bits
+   02b6   07            	RLC
+   02b7   07            	RLC
+   02b8   e6 f8         	ANI	11111000B	; clear bottom 3 bits
+   02ba   b3            	ORA	E		; set the bits and clear 'C'
+   02bb   77            	MOV	M,A		; and update the value in RAM
+   02bc   15            	DCR	D		; next digit
+   02bd   c2 ab 02      	JNZ	IOB1		; not done
+                        ;
+                        ;	Done - have all three digits
+                        ;
+   02c0   3e 0f         	MVI	A,30/2		; beep for 30 ms
+   02c2   c3 74 02      	JMP	HORN		; exit via HORN
+                        
+                        ;	DOD - DECODE FOR OCTAL DISPLAY
+                        ;
+                        ;	ENTRY	(H,L) = ADDRESS OF LED REFRESH AREA
+                        ;		(B) = *OR* PATTERN TO FORCE ON BARS OR PERIODS
+                        ;		(A) = OCTAL VALUE
+                        ;	EXIT	(H,L) = HEX DIGIT ADDRESS
+                        ;	USES	A,B,C,D,H,L
+                        
+   02c5   d5            DOD	PUSH	D
+   02c6   16 06         	MVI	D,DODA/256
+   02c8   0e 03         	MVI	C,3
+   02ca   17            DOD1	RAL			; LEFT 3 PLACES
+   02cb   17            	RAL
+   02cc   17            	RAL
+   02cd   f5            	PUSH	PSW		; SAVE FOR NEXT DIGIT
+   02ce   e6 07         	ANI	7
+   02d0   c6 7e         	ADI	LOW DODA	; HRJ was DODA#256
+   02d2   5f            	MOV	E,A		; (D) = INDEX
+   02d3   1a            	LDAX	D		; (A) = PATTERN
+   02d4   a8            	XRA	B
+   02d5   e6 7f         	ANI	177Q
+   02d7   a8            	XRA	B
+   02d8   77            	MOV	M,A		; SET IN MEMORY
+   02d9   23            	INX	H
+   02da   78            	MOV	A,B
+   02db   07            	RLC
+   02dc   47            	MOV	B,A
+   02dd   f1            	POP	PSW		; (A) = VALUE
+   02de   0d            	DCR	C
+   02df   c2 ca 02      	JNZ	DOD1		; IF MORE TO GO
+   02e2   d1            	POP	D
+   02e3   c9            	RET			; RETURN
+                        
+                        ;	UFD - UPDATE FRONT PANEL DISPLAYS.
+                        ;
+                        ;	UFD IS CALLED BY THE CLOCK INTERRUPT PROCESSOR WHEN IT IS
+                        ;	TIME TO UPDATE THE DISPLAY CONTENTS. CURRENTLY, THIS IS DONE
+                        ;	EVERY 32 INTERRUPTS, OR ABOUT 32 TIMES A SECOND.
+                        ;
+                        ;	ENTRY	(H,L) = ADDRESS OF REFCNT
+                        ;		(B) = MFLAG 	(gfr)
+                        ;
+                        ;	EXIT	NONE
+                        ;	USES	ALL
+                        
+   02e4   3e 02         UFD	MVI	A,UO.DDU	; Disable Display Update
+   02e6   a0            	ANA	B		; in MFLAG?
+   02e7   c0            	RNZ			; IF NOT TO HANDLE UPDATE
+                        
+   02e8   2e 06         	MVI	L,LOW DSPROT	; (HL) = DSPROT (same page)
+   02ea   7e            	MOV	A,M		; fetch period pattern
+   02eb   07            	RLC			; rotate it left
+   02ec   77            	MOV	M,A		; and save
+   02ed   47            	MOV	B,A
+   02ee   23            	INX	H		; now point to DSPMOD
+                        ;	ERRNZ	DSPMOD-DSPROT-1	; code assumes DSPMOD follows DSPROT
+   02ef   7e            	MOV	A,M		; (A) = DSPMOD
+   02f0   e6 02         	ANI	00000010B	; Memory display mode?
+   02f2   2a 14 20      	LHLD	ABUSS
+   02f5   ca 0a 03      	JZ	UFD1		; IF MEMORY
+                        
+                        ;	Displaying registers
+                        
+   02f8   cd 9a 02      	CALL	LRA		; LOCATE REGISTER ADDRESS
+   02fb   e5            	PUSH	H
+   02fc   21 72 06      	LXI	H,DSPA
+   02ff   19            	DAD	D		; (H,L) = ADDRESS OF REG NAME PATTERNS
+   0300   7e            	MOV	A,M
+   0301   23            	INX	H
+   0302   66            	MOV	H,M
+   0303   6f            	MOV	L,A		; (H,L) = REG NAME PATTERN
+   0304   e3            	XTHL
+   0305   b4            	ORA	H		; CLEAR 'Z'
+   0306   7e            	MOV	A,M
+   0307   23            	INX	H
+   0308   66            	MOV	H,M
+   0309   6f            	MOV	L,A		; (HL) = ADDRESS OF REGISTER PAIR CONTENTS
+                        
+                        ;	Displaying Memory
+                        
+   030a   f5            UFD1	PUSH	PSW
+   030b   eb            	XCHG
+   030c   21 0b 20      	LXI	H,ALEDS
+   030f   7a            	MOV	A,D
+   0310   cd c5 02      	CALL	DOD		; FORMAT ABANK HIGH HALF
+   0313   7b            	MOV	A,E
+   0314   cd c5 02      	CALL	DOD		; FORMAT ABANK LOW HALF
+   0317   f1            	POP	PSW
+   0318   1a            	LDAX	D
+   0319   ca c5 02      	JZ	DOD		; IF MEMORY, DECODE BYTE VALUE
+                        
+                        ;	IS REGISTER, SET REGISTER NAME,
+                        
+   031c   36 00         	MVI	M,0		; CLEAR DIGIT - gfr
+   031e   e1            	POP	H
+   031f   22 12 20      	SHLD	DLEDS+1
+   0322   c9            	RET
+                        
+                        ;	$HLIHL - Load HL indirect through HL
+                        ;
+                        ;	(HL) = ((HL))
+                        ;
+                        ;	USES:	A,H,L
+   0323   7e            $HLIHL:	MOV	A,M
+   0324   23            	INX	H
+   0325   66            	MOV	H,M
+   0326   6f            	MOV	L,A
+   0327   c9            	RET
+                        
+                        ;	I/O ROUTINES TO BE COPIED INTO AND USED IN RAM.
+                        ;
+                        ;	MUST CONTINUE TO 3777A FOR PROPER COPY.
+                        ;	THE TABLE MUST ALSO BE BACKWARDS TO THE FINAL RAM.
+                        
+   03f9                 	ORG	0400H-7
+                        
+   03f9   01            PRSROM:	DB	1	; REFIND
+   03fa   00            	DB	0	; CTLFLG
+   03fb   00            	DB	0	; MFLAG
+   03fc   00            	DB	0	; DSPMOD
+   03fd   00            	DB	0	; DSPROT
+   03fe   0a            	DB	10	; REGI
+   03ff   c9            	DB	MI.RET
+                        
+                        
+                        
+                        
+                        ;
+                        ;	Here is a modified version of Jon Chapman's
+                        ;	GWMON. Jumping here invokes the console monitor loop.
+                        ;	All initialization code has been moved to the main
+                        ;	PAM-8 section.
+                        ;
+                        ;	- gfr
+                        ;
+                        ;SM8085R1 -- GWMON-80 Small Monitor for 8085 SBC rev 1
+                        ;
+                        ;This customization uses the 8085's built-in serial I/O and
+                        ;is configured for the Glitch Works 8085 SBC rev 1 memory
+                        ;map. By Jon Chapman, Glitch Works.
+                        ;
+                        ;;Modified by Lee Hart for H8 Mini - 9 Aug 2026
+                        ;;double semicolons denote changes from Jon Chapman's code
+                        ;;resume editing at ------------
+                        ;;
+                        ;
+                        ;Hardware Equates
+                        ;
+                        ;;H8 Mini memory map, 27C256 32k ROM, jumper P3 in ROM position
+                        ;; ROM at 0-1FFFh, 8000-FFFF (0-1FFFh mirrors 8000-9FFFh)
+                        ;; RAM at 2000-7FFFh
+                        
+                        ; get console ready for I/O
+                        ;
+                        ;
+                        ;	To maintain known entry points for useful routines
+                        ;	we put the appropriate jump instructions here
+                        
+   0400                 	ORG	0400H
+                        	
+   0400   c3 10 04      	JMP	GWMON		; 400H - Main monitor entry point
+   0403   c3 20 04      	JMP	WSTART		; 403H - warm restart
+   0406   c3 dd 05      	JMP	CINNE		; 406H - Read character from console (no echo)
+   0409   c3 00 06      	JMP	COUT		; 409H - Write character to console
+                        ;
+                        ;	Bit times for bit-banged serial
+                        ;
+                        ; Using Intel Application Note AP-29 the following are computed for
+                        ; use with 4.0 MHz crystal - gfr
+                        ;
+                        
+                        ;BITTIME	DW	0137H		;2400 BPS with 4.0 MHz crystal
+                        ;HALFBIT	DW	011CH		;Half-bit time	
+                        
+   040c   19 01         BITTIME	DW	0119H		;4800 BPS with 4.0 MHz crystal
+   040e   0d 01         HALFBIT	DW	010DH		;Half-bit time
+                        
+                        ;BITTIME	DW	010AH		;9600 BPS with 4.0 MHz crystal
+                        ;HALFBIT	DW	0106H		;Half-bit time
+                        
+   0410   af            GWMON:	XRA	A		;NUL in A
+   0411   cd 00 06      	CALL	COUT		;Clear the line
+                        	
+   0414   21 fc 04      	LXI	H, SIGNON$	; SM signon
+   0417   cd ec 04      	CALL	PRTCLS
+                        	
+   041a   21 09 00      	LXI	H, PAMVER$	; report PAM/8 version too
+   041d   cd ec 04      	CALL	PRTCLS
+                        ;
+                        ;WSTART -- Warm start routine
+                        ;
+                        ;Falls through to the command processor.
+                        ;
+   0420   31 00 80      WSTART: LXI	SP,STACK	; Reload stack pointer
+                        
+                        ;
+                        ;SCP -- GWMON-80 Small Command Processor
+                        ;
+                        ;This is the small command processor for Glitch Works
+                        ;Monitor for 8080/8085/Z80 and compatible.
+                        ;
+                        
+                        
+                        ;
+                        ;CMDLP -- Small command processor loop
+                        ;
+                        ;Get a character from the console device and immediately 
+                        ;handle it by passing off to helper function.
+                        ;
+                        ;Falls through to ERROR if an invalid command is specified.
+                        ;
+   0423   21 20 04      CMDLP:	LXI	H,WSTART	; (HL) = warm start address
+   0426   e5            	PUSH	H		; prime stack for RET
+                        
+   0427   21 0b 05      	LXI	H,PROMPT$	; console prompt
+   042a   cd ec 04      	CALL	PRTCLS		; print it
+   042d   cd 6f 04      	CALL	CIN		; wait for single character
+   0430   f6 20         	ORI	20H		; allow lowercase input
+                        ;
+                        ;	Command dispatch
+                        ;
+   0432   21 c9 05      	LXI	H,CMDTAB-1
+   0435   23            CMDLP1:	INX	H		; Point to next valid command char
+   0436   be            	CMP	M		; match?
+   0437   ca 4c 04      	JZ	RUNCMD		; yes, run command handler
+   043a   47            	MOV	B,A		; save user entry
+   043b   7e            	MOV	A,M		; examine command
+   043c   b7            	ORA	A		; set flags
+   043d   78            	MOV	A,B		; restore user entry
+   043e   23            	INX	H		; Get past handler address
+   043f   23            	INX	H
+   0440   c2 35 04      	JNZ	CMDLP1		; fall through if at end of table
+                        
+                        ;
+                        ;ERRMSG -- Print generic error message and abort
+                        ;
+                        ;Falls through to PRTERR.
+                        ;
+   0443   21 13 05      ERRMSG:	LXI	H,ERR$		;Fall through to PRTERR
+                        
+                        ;
+                        ;PRTERR -- Print a null-terminated error string
+                        ;
+                        ;entry: HL contains pointer to start of null-terminated string
+                        ;exit: string at HL printed to console
+                        ;exit: program execution returned to command loop
+                        ;
+   0446   cd ec 04      PRTERR:	CALL	PRTCLS
+   0449   c3 20 04      	JMP	WSTART		;Warm start, restore SP
+                        
+                        ;
+                        ;RUNCMD -- Run a command handler from CMDTAB
+                        ;
+                        ;entry: H register points to command letter
+                        ;exit: control transferred to command handler
+                        ;
+   044c   cd dd 04      RUNCMD:	CALL	PRTSPC
+   044f   23            	INX	H		;Point to low handler address
+   0450   5e            	MOV	E,M
+   0451   23            	INX	H
+   0452   56            	MOV	D,M
+   0453   eb            	XCHG
+   0454   e9            	PCHL
+                        
+                        ;
+                        ;GETADR -- Get a 16-bit address from the console
+                        ;
+                        ;pre: none
+                        ;post: HL contains address from console
+                        ;
+   0455   cd 5e 04      GETADR:	CALL	GETHEX
+   0458   67            	MOV	H,A
+   0459   cd 5e 04      	CALL	GETHEX
+   045c   6f            	MOV	L,A
+   045d   c9            	RET
+                        
+                        ;
+                        ;GETHEX -- Get byte from console as hex
+                        ;
+                        ;Enter at GETHE2 with character in A register from EDTCMD.
+                        ;
+                        ;entry: none
+                        ;exit: A register contains byte from hex input
+                        ;exit: Carry flag set if non-hex character received
+                        ;
+   045e   cd 6f 04      GETHEX:	CALL	CIN
+   0461   e5            GETHE2:	PUSH	H
+   0462   67            	MOV	H,A
+   0463   cd 6f 04      	CALL	CIN
+   0466   6f            	MOV	L,A
+   0467   cd 75 04      	CALL	HEXBYT
+   046a   e1            	POP	H
+   046b   da 43 04      	JC	ERRMSG		;Invalid hex char, abort
+   046e   c9            	RET
+                        ;;end of INCLUDE 'SCP.INC'
+                        					
+                        ;;	INCLUDE	'common.inc' (included inline)
+                        ;
+                        ;COMMON -- Functions Common to SM and XM
+                        ;
+                        ;These functions are used by both the SM and XM versions
+                        ;of GWMON-80.
+                        ;
+                        
+                        
+                        ;
+                        ;CIN -- Get a char from the console and echo
+                        ;
+                        ;Returns through COUT.
+                        ;
+                        ;entry: console device is initialized
+                        ; exit: received char is in A register
+                        ;		received char is echoed
+                        ;
+   046f   cd dd 05      CIN:	CALL	CINNE
+   0472   c3 00 06      	JMP	COUT
+                        
+                        ;
+                        ;HEXBYT -- Convert pair of ASCII characters to byte
+                        ;
+                        ;entry: H register contains high ASCII coded hex nybble
+                        ;		L register contains low ASCII coded hex nybble
+                        ; exit: A register contains converted byte
+                        ;		CY flag set if non-hex character input
+                        ;		Z flag set if conversion results in 0x00
+                        ;
+   0475   7c            HEXBYT:	MOV	A,H
+   0476   cd 86 04      	CALL	ASCHEX
+   0479   d8            	RC
+   047a   07            	RLC
+   047b   07            	RLC
+   047c   07            	RLC
+   047d   07            	RLC
+   047e   67            	MOV	H,A
+   047f   7d            	MOV	A,L
+   0480   cd 86 04      	CALL	ASCHEX
+   0483   d8            	RC
+   0484   b4            	ORA	H
+   0485   c9            	RET
+                        
+                        ;
+                        ;ASCHEX -- Convert ASCII character to hex nybble
+                        ;
+                        ;entry: A register contains ASCII coded nybble
+                        ; exit: A register contains nybble
+                        ;		CY flag set if ASCII character is invalid hex
+                        ;
+   0486   d6 30         ASCHEX:	SUI	'0'		; remove ASCII bias
+   0488   d8            	RC			; Return error if less than 0
+   0489   fe 0a         	CPI	10		; check for hex
+   048b   3f            	CMC			; Clear CY
+   048c   f8            	RM			; if [0..9] ... done
+   048d   e6 5f         	ANI	01011111B	; Upper case
+   048f   d6 07         	SUI	'A'-'9'-1	; ASCII to hex bias
+   0491   fe 10         	CPI	16		; check for hexadecimal range
+   0493   3f            	CMC			; return error if >= 16
+   0494   c9            	RET
+                        
+                        ;
+                        ;HEXDMP -- Hex dump memory to console
+                        ;
+                        ;This routine prints the contents of memory starting at HL
+                        ;and ending at DE in 16-byte blocks.
+                        ;
+                        ;entry: HL register pair contains starting address
+                        ;		DE register pair contains ending address
+                        ; exit:	contents of memory printed to console
+                        ;
+   0495   06 00         HEXDMP:	MVI	B,0		;Initialize B as completion flag
+                        
+   0497   cd b8 04      HEXDM1:	CALL	PRTADR
+   049a   0e 10         	MVI	C,16		;C = line loop counter
+   049c   cd dd 04      HEXDM2:	CALL	PRTSPC
+   049f   cd c8 04      	CALL	DMPLOC
+   04a2   7b            	MOV	A,E		;A = low byte of end address
+   04a3   bd            	CMP	L		;Compare current low byte
+   04a4   c2 ad 04      	JNZ	HEXDM3
+   04a7   7a            	MOV	A,D		;A = high byte of end address
+   04a8   bc            	CMP	H		;Compare current high byte
+   04a9   c2 ad 04      	JNZ	HEXDM3
+   04ac   05            	DCR	B		;B = nonzero, done
+                        
+   04ad   23            HEXDM3:	INX	H		;Increment current address pointer
+   04ae   0d            	DCR	C
+   04af   c2 9c 04      	JNZ	HEXDM2		;Print more lines
+                        
+   04b2   78            	MOV	A,B
+   04b3   b7            	ORA	A
+   04b4   ca 97 04      	JZ	HEXDM1		;Yes, dump more memory
+   04b7   c9            	RET			;No, done
+                        
+                        ;
+                        ;PRTADR -- Print an address to the console
+                        ;
+                        ;Prints CR, LF, a 16-bit address, a space, and a colon. 
+                        ;Destroys A register contents.
+                        ;
+                        ;Returns through COUT.
+                        ;
+                        ;entry: HL pair contains address to print
+                        ; exit: HL printed to console as hex
+                        ;
+   04b8   cd e2 04      PRTADR: CALL	CRLF
+   04bb   7c            	MOV	A,H
+   04bc   cd c9 04      	CALL	PRTHEX
+   04bf   7d            	MOV	A,L
+   04c0   cd c9 04      	CALL	PRTHEX
+   04c3   3e 3a         	MVI	A,':'
+   04c5   c3 00 06      	JMP	COUT
+                        
+                        ;
+                        ;DMPLOC -- Print a byte at HL to console
+                        ;
+                        ;Falls through to PRTHEX.
+                        ;
+                        ;pre: HL pair contains address of byte
+                        ;post: byte at HL printed to console
+                        ;
+   04c8   7e            DMPLOC:	MOV	A,M
+                        
+                        ;
+                        ;PRTHEX -- Output byte to console as hex
+                        ;
+                        ;Falls through to PRTNIB.
+                        ;
+                        ;entry: A register contains byte to be output
+                        ; exit: byte is output to console as hex
+                        ;
+   04c9   f5            PRTHEX: PUSH	PSW		;Save A register on stack
+   04ca   0f            	RRC			;Rotate high nybble down
+   04cb   0f            	RRC
+   04cc   0f            	RRC
+   04cd   0f            	RRC
+   04ce   cd d2 04      	CALL	PRTNIB		;Print high nybble
+   04d1   f1            	POP	PSW		;Restore A register
+                        
+                        ;
+                        ;PRTNIB -- Print hex nybble on console
+                        ;
+                        ;Returns through COUT.
+                        ;
+                        ;entry: A register contains nybble
+                        ; exit: nybble printed to console
+                        ;
+   04d2   e6 0f         PRTNIB:	ANI	0FH		;Mask off low nybble
+   04d4   c6 90         	ADI	90H
+   04d6   27            	DAA
+   04d7   ce 40         	ACI	40H
+   04d9   27            	DAA
+   04da   c3 00 06      	JMP	COUT
+                        
+                        ;
+                        ;PRTSPC -- Print a space to the console
+                        ;
+                        ;Returns through COUT.
+                        ;
+                        ;pre: none
+                        ;post: ASCII space printed to console
+                        ;
+   04dd   3e 20         PRTSPC:	MVI	A,' '
+   04df   c3 00 06      	JMP	COUT
+                        
+                        ;
+                        ;CRLF -- Print a CR, LF
+                        ;
+                        ;Returns through COUT.
+                        ;
+                        ;entry: none
+                        ; exit: CR, LF printed to console
+                        ;
+   04e2   3e 0d         CRLF:	MVI	A,CR
+   04e4   cd 00 06      	CALL	COUT
+   04e7   3e 0a         	MVI	A,LF
+   04e9   c3 00 06      	JMP	COUT
+                        ;
+                        ;PRTCLS -- Print CR, LF, and a high bit terminated string
+                        ;
+                        ;Falls through to PRTSTR
+                        ;
+                        ;entry: HL contains pointer to start of string
+                        ; exit: CR, LF, and string at HL printed to console
+                        ;
+   04ec   cd e2 04      PRTCLS:	CALL	CRLF
+                        
+                        ;
+                        ;PRTSTR -- Print a high bit terminated string
+                        ;
+                        ;Destroys contents of A register.
+                        ;
+                        ;entry: HL contains pointer to start of string
+                        ; exit: string at HL printed to console
+                        ;
+   04ef   7e            PRTSTR:	MOV	A, M
+   04f0   e6 7f         	ANI	07FH		;Strip high bit
+   04f2   cd 00 06      	CALL	COUT
+   04f5   7e            	MOV	A,M
+   04f6   b7            	ORA	A		;Set flags
+   04f7   f8            	RM			;High bit set, done
+   04f8   23            	INX	H
+   04f9   c3 ef 04      	JMP	PRTSTR
+                        ;;end of INCLUDE 'common.inc'
+                        
+                        ;; ---------------------
+                        ;;
+                        ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+                        ;Small Monitor Strings
+                        ;
+                        ;These strings are terminated by setting the high bit in the
+                        ;last character.
+                        ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+   04fc   47 57 4d 4f   SIGNON$:	DB 'GWMON-80 1.1 S', 'M' + 80H
+   0500   4e 2d 38 30   
+   0504   20 31 2e 31   
+   0508   20 53 cd      
+   050b   0a be         PROMPT$:	DB LF, '>' + 80H
+   050d   43 4b 53 55   CSERR$:		DB 'CKSUM '
+   0511   4d 20         
+   0513   45 52 52 4f   ERR$:		DB 'ERRO', 'R' + 80H
+   0517   d2            
+                        
+                        ;;end of INCLUDE 'sm.inc'
+                        
+                        ;;	INCLUDE	'scmdstd.inc'	;SM standard commands
+                        ;
+                        ;SCMDSTD -- Small Monitor Standard Commands
+                        ;
+                        ;This file contains implementations of all standard SM
+                        ;commands. The command table is located at the end of the
+                        ;file.
+                        ;
+                        
+                        ;
+                        ;HDCMD -- Hex dump command
+                        ;
+   0518   cd 55 04      HDCMD:	CALL	GETADR		;HL = start address
+   051b   eb            	XCHG			;DE = start address
+   051c   cd dd 04      	CALL	PRTSPC
+   051f   cd 55 04      	CALL	GETADR		;HL = end address
+   0522   eb            	XCHG			;HL = start, DE = end
+   0523   c3 95 04      	JMP	HEXDMP		;Return through HEXDMP
+                        
+                        ;
+                        ;EDTCMD -- Edit memory command
+                        ;
+                        ;Breaks out to main command loop through GETHEX jump to
+                        ;WSTART.
+                        ;
+   0526   cd 55 04      EDTCMD:	CALL	GETADR		;HL = address to open
+   0529   cd b8 04      EDTCM1:	CALL	PRTADR		;Print location address
+   052c   cd dd 04      	CALL	PRTSPC
+   052f   cd c8 04      	CALL	DMPLOC		;Print contents of location
+   0532   cd dd 04      	CALL	PRTSPC
+   0535   cd 6f 04      	CALL	CIN		;Get user input
+   0538   fe 0d         	CPI	NEXTLOC		;Check for NEXTLOC character
+   053a   ca 47 05      	JZ	EDTCM2		;Yes, go to next location
+   053d   cd 61 04      	CALL	GETHE2		;No, process as hex input
+   0540   77            	MOV	M,A
+   0541   cd dd 04      	CALL	PRTSPC
+   0544   cd c8 04      	CALL	DMPLOC		;Print contents of location (verification)
+   0547   23            EDTCM2:	INX	H
+   0548   c3 29 05      	JMP	EDTCM1
+                        
+                        ;
+                        ;GOCMD -- Call out to a specified address
+                        ;
+                        ;The stack is primed with the GWMON-80 warm start address.
+                        ;Called program can return control to GWMON-80 through a RET
+                        ;as long as the stack is not disturbed.
+                        ;
+   054b   cd 55 04      GOCMD:	CALL	GETADR		;HL = Address to call
+   054e   e9            	PCHL			;Go to specified address
+                        
+                        ;
+                        ;INPCMD -- Input to port command; print value to console
+                        ;
+                        ;	Revised to use PAM-8 port I/O routine
+                        ;		-gfr
+                        ;
+   054f   cd 5e 04      INPCMD:	CALL	GETHEX		; Get port from console
+   0552   6f            	MOV	L,A		; save in (L)
+   0553   cd dd 04      	CALL	PRTSPC		; space separator
+   0556   cd 3e 02      	CALL	IN		; input via PAM-8 IN routine
+   0559   c3 c9 04      	JMP	PRTHEX		; display the result
+                        
+                        ;
+                        ;OUTCMD -- Output to port command
+                        ;
+                        ;	Revised to use PAM-8 port I/O routine
+                        ;		-gfr
+                        ;
+   055c   cd 5e 04      OUTCMD:	CALL	GETHEX		; get port number
+   055f   6f            	MOV	L,A		; (L) = port
+   0560   cd dd 04      	CALL	PRTSPC		; space separator
+   0563   cd 5e 04      	CALL	GETHEX		; get value to output
+   0566   67            	MOV	H,A		; (H) = value
+   0567   c3 41 02      	JMP	OUT		; output via PAM-8 OUT routine
+                        
+                        ;
+                        ;LODCMD -- Load an Intel HEX file from console
+                        ;
+                        ;This loader accepts data with both CR (*NIX) and
+                        ;CR,LF (DOS/Windows) terminated lines.
+                        ;
+                        ;Intel HEX record may be ended with:
+                        ;   * DATA (0x00) record with length of 0
+                        ;   * Any nonzero record type
+                        ;
+                        ; exit: Intel HEX file loaded, or error printed
+                        ;
+                        ; First suspend all clock interrupts (RST 7.5) and clear LEDs. We leave
+                        ; other interrupts running in anticipation of interrupt-driven serial
+                        ; I/O in the future.
+                        ;
+   056a   20            LODCMD:	RIM			; Read interrupt mask
+   056b   e6 03         	ANI	00000011B	; leave 5.5 and 6.5 alone
+   056d   f6 0c         	ORI	00001100B	; 7.5 HIGH (interrupts off)
+   056f   30            	SIM			; set new mask
+                        	
+   0570   cd 24 06      	CALL	BLANK		; blank the LEDs
+                        ;
+                        ;	Loop over records
+                        ;
+   0573   cd e2 04      LODCM0:	CALL	CRLF		; start a new ouput line
+   0576   cd dd 05      LODCM1:	CALL	CINNE		; read a byte
+   0579   fe 3a         	CPI	':'		; all records start with ':'
+   057b   c2 76 05      	JNZ	LODCM1		; Wait for start colon
+                        ;
+                        ;	Have new record
+                        ;
+   057e   cd 00 06      	CALL	COUT		; Print starting colon
+   0581   cd 5e 04      	CALL	GETHEX		; Get record length
+   0584   ca aa 05      	JZ	LODCM4		; Length == 0, done
+   0587   47            	MOV	B,A		; Record length in B
+   0588   4f            	MOV	C,A		; Start checksumming in C
+                        
+   0589   cd 55 04      	CALL	GETADR		; HL = 16-bit starting address
+   058c   81            	ADD	C		; A == L from GETADR
+   058d   84            	ADD	H
+   058e   4f            	MOV	C,A		; Checksum
+                        
+   058f   cd 5e 04      	CALL	GETHEX		; Get record type
+   0592   c2 aa 05      	JNZ	LODCM4		; Not Record Type 00 (DATA), done
+                        ;
+                        ;	Process the record
+                        ;
+   0595   cd 5e 04      LODCM2:	CALL	GETHEX		; This record processing loop
+   0598   77            	MOV	M,A		; Store char at HL
+   0599   81            	ADD	C
+   059a   4f            	MOV	C,A		; update checksum
+   059b   23            	INX	H		; point to next destination
+   059c   05            	DCR	B		; decrement the line count
+   059d   c2 95 05      	JNZ	LODCM2		; Not done with the line
+                        	
+   05a0   cd 5e 04      LODCM3:	CALL	GETHEX		; Get checksum byte
+   05a3   81            	ADD	C
+   05a4   c2 b5 05      	JNZ	CSUMER		; Checksum bad, print error
+   05a7   c3 73 05      	JMP	LODCM0		; Process more records
+                        ;
+                        ;	Done getting data, eat remaining characters.
+                        ;
+   05aa   cd 6f 04      LODCM4:	CALL	CIN		; grab a byte
+   05ad   fe 0a         	CPI	LF		; end of line?
+   05af   c2 aa 05      	JNZ	LODCM4		; No LF, keep eating
+   05b2   c3 bb 05      	JMP	LODEXT		; Got LF, done!
+                        ;
+                        ;	Checksum error
+                        ;
+   05b5   21 0d 05      CSUMER:	LXI	H,CSERR$	; Print checksum error to console
+   05b8   cd 46 04      	CALL	PRTERR
+                        ;
+                        ;	Exit, reenable clock interrupts and LED refresh.
+                        ;
+   05bb   20            LODEXT:	RIM			; Read interrupt mask
+   05bc   e6 03         	ANI	00000011B	; leave 5.5 and 6.5 alone
+   05be   f6 08         	ORI	00001000B	; 7.5 LOW (interrupts on)
+   05c0   30            	SIM			; set new mask
+                        
+   05c1   3a 08 20      	LDA	MFLAG		; get MFLAG byte
+   05c4   e6 bf         	ANI	377Q-UO.NFR	; turn on FP refresh
+   05c6   32 08 20      	STA	MFLAG		; save it
+   05c9   c9            	RET			; and done...
+                        
+                        ;
+                        ;	CMDTAB -- Table/array of commands
+                        ;
+                        ;	Table entry structure:
+                        ;	  * Single command character, lowercase only (0x00 = end)
+                        ;	  * Pointer to implementation routine
+                        ;
+   05ca   64            CMDTAB:	DB	'd'
+   05cb   18 05         	DW	HDCMD
+   05cd   65            	DB	'e'
+   05ce   26 05         	DW	EDTCMD
+   05d0   67            	DB	'g'
+   05d1   4b 05         	DW	GOCMD
+   05d3   69            	DB	'i'
+   05d4   4f 05         	DW	INPCMD
+   05d6   6c            	DB	'l'
+   05d7   6a 05         	DW	LODCMD
+   05d9   6f            	DB	'o'
+   05da   5c 05         	DW	OUTCMD
+                        	
+   05dc   00            NULCMD:	DB	0		; terminate command list
+                        
+                        				;;end of INCLUDE 'scmdnull.inc'
+                        ;;---------------
+                        ;;	INCLUDE	'8085sio1.inc'	;Intel 8085 SID/SOD driver
+                        ;
+                        ;8085SIO1 -- Console I/O Drivers for 8085 Built-In Serial
+                        ;
+                        ;
+                        
+                        	
+                        ;
+                        ;	CINNE -- Get a char from the console, no echo
+                        ;
+                        ;	This is a blocking read. We wait until a character is available.
+                        ;	Since serial I/O is interrupt-driven we simply look to see if
+                        ;	a byte is available. If not, we wait otherwise retrieve the byte
+                        ;	and shift the buffer contents down one. We put interrupts on hold
+                        ;	while we're playing with these values.
+                        ;
+   05dd   e5            CINNE:	PUSH	H
+   05de   c5            	PUSH	B
+                        	
+   05df   21 36 20      	LXI	H,INBADDR	; (HL) = address of buffer location
+   05e2   cd 23 03      	CALL	$HLIHL		; (HL) = buffer
+   05e5   7e            CINN1:	MOV	A,M		; get byte count
+   05e6   b7            	ORA	A		; test for zero
+   05e7   ca e5 05      	JZ	CINN1		; loop if nothing there
+                        ;
+                        ;	we have a byte in the buffer! - load it and return
+                        ;
+   05ea   f3            	DI			; don't step on the IRQ handler
+                        	
+   05eb   35            	DCR	M		; decrement the byte count
+   05ec   4e            	MOV	C,M		; (C) = count - 1
+   05ed   23            	INX	H		; point to byte to be read
+   05ee   46            	MOV	B,M		; (B) = character we want
+                        	
+   05ef   0d            CINN2:	DCR	C		; move others down
+   05f0   fa fb 05      	JM	CINN3		; no more
+   05f3   23            	INX	H		; next one
+   05f4   7e            	MOV	A,M		; fetch it
+   05f5   2b            	DCX	H		; back one
+   05f6   77            	MOV	M,A		; store it
+   05f7   23            	INX	H		; fix pointer
+   05f8   c3 ef 05      	JMP	CINN2		; and loop
+                        	
+   05fb   fb            CINN3:	EI			; restore interrupts
+   05fc   78            	MOV	A,B		; get back our byte
+                        	
+   05fd   c1            	POP	B
+   05fe   e1            	POP	H
+                        
+                        ;	warm restart feature disabled - gfr
+                        ;	
+                        ;	CPI	CANCEL		; Check for CANCEL character
+                        ;	JZ	WSTART		; Yes, warm start monitor
+   05ff   c9            	RET
+                        	
+                        
+                        ;
+                        ;COUT -- Output a character to the console
+                        ;
+                        ;This routine *must* preserve the contents of the A register
+                        ;or CIN will not function properly.
+                        ;
+                        ;Interrupts are disabled to maintain critical timing in this
+                        ;routine. They are unconditionally re-enabled before return.
+                        ;
+                        ;entry: A register contains char to be printed
+                        ;		BITTIME, HALFBIT are initialized
+                        ; exit: character is printed to the console
+                        ;		interrupts are enabled
+                        ;
+   0600   f5            COUT:	PUSH	PSW		;Preserve char in A
+   0601   c5            	PUSH	B		;Preserve registers
+   0602   e5            	PUSH	H
+   0603   f3            	DI			;Must disable interrupts
+   0604   4f            	MOV	C,A		;C = character to output
+   0605   af            	XRA	A		;Clear CY
+   0606   06 0a         	MVI	B,10		;Bit count for entire serial transaction (10 - gfr)
+                        
+   0608   3e 80         CO1:	MVI	A,80H		; < 7> ; Set what will become SOD enable bit
+   060a   1f            	RAR			; < 4> ; Move CY into SOD data bit
+   060b   30            	SIM			; < 4> ; Output it on SOD
+                        	
+   060c   2a 0c 04      	LHLD	BITTIME		; <16> ; Delay one bit time
+                        	
+   060f   2d            CO2:	DCR	L		; < 4> ;
+   0610   c2 0f 06      	JNZ	CO2		; <10> ;
+   0613   25            	DCR	H		; < 4> ;
+   0614   c2 0f 06      	JNZ	CO2		; <10> ;
+                        
+   0617   37            	STC			; < 4> ; Set CY, will become stop bit	
+   0618   79            	MOV	A,C		; < 4> ;
+   0619   1f            	RAR			; < 4> ; Get a bit from the byte to output into CY
+   061a   4f            	MOV	C,A		; < 4> ;
+   061b   05            	DCR	B		; < 4> ; Decrement bit count
+   061c   c2 08 06      	JNZ	CO1		; <10> ; Not done, send more bits
+                        		
+   061f   e1            	POP	H		;Restore registers
+   0620   c1            	POP	B
+   0621   fb            	EI
+                        
+   0622   f1            	POP	PSW		;A = char printed
+   0623   c9            	RET
+                        
+                        ;	END GWMON Code
+                        
+                        ;
+                        ;	BLANK - ensure that all LED segments are extinguished.
+                        ;
+                        ;	This is useful when interrupts are disabled for any noticeable period of
+                        ;	time, otherwise some LED segments will appear to be "stuck" on (as the
+                        ;	interrupt-driven refresh cycle was stopped mid refresh.)  Typically
+                        ;	immediately preceded by a DI instruction.
+                        ;
+                        ;	USES:	A,F
+                        ;
+   0624   c5            BLANK:	PUSH	B		; BC used for working storage
+                        
+   0625   db f0         	IN	PPI+IO.A	; read port A settings
+   0627   e6 f0         	ANI	11110000B	; clear LED selects (PA0..PA3)
+   0629   47            	MOV	B,A		; save it
+   062a   0e 09         	MVI	C,9		; 9 LEDs, work right to left
+   062c   81            BLOOP:	ADD	C		; address an LED
+   062d   d3 f0         	OUT	PPI+IO.A	; select it
+   062f   af            	XRA	A		; zero = all segments off
+   0630   d3 f1         	OUT	PPI+IO.B	; turn off all segments
+   0632   78            	MOV	A,B		; get back mask
+   0633   0d            	DCR	C		; count down
+   0634   c2 2c 06      	JNZ	BLOOP		; and loop through all 9
+                        
+   0637   c1            	POP	B
+   0638   c9            	RET
+                        
+                        
+                        ;	DLYNOI - Delay with No Interrupts. Delays the specified number of
+                        ;	2ms intervals, e.g. if A = 100/2 then delay 100 ms.
+                        ;
+                        ;	Functionally equivalent to the original Heath DLY routine
+                        ;	but for use when interrupts are disabled. Uses simple nested
+                        ;	loop counters to delay.
+                        ;
+                        ;	Timing parameters are tuned for an 8085 running at 2Mhz.
+                        ;
+                        ;	USES:	A,F
+                        ;
+                        ; =====================================================================
+   0639   c5            DLYNOI:	PUSH	B		; BC used for working storage
+   063a   47            	MOV	B,A		; B = outer loop counter
+                        ;
+                        ;	Each inner loop takes 18 T-states or 9 uS of time. 222 repetitions
+                        ;	gives 1,998 uS of time.
+                        ;
+   063b   0e de         OUTER:	MVI	C,222		; 222 * 9 ~= 2 ms
+   063d   00            INNER:	NOP			; kill time (4 T-states)
+   063e   0d            	DCR	C		; decrement inner counter (4 T-states)
+   063f   c2 3d 06      	JNZ	INNER		; count down (10 T-states each jump)
+                        	
+   0642   05            	DCR	B		; decrement outer counter
+   0643   c2 3b 06      	JNZ	OUTER		; loop 'til done
+                        	
+   0646   c1            	POP	B		; restore BC
+   0647   c9            	RET
+                        
+                        ;	RCK - Read Console Keypad
+                        ;
+                        ;	RCK is called to read a keystroke from the console keypad.
+                        ;	Read operations are blocking - the routine will wait until a key
+                        ;	is pressed before returning.
+                        ;
+                        ;	This version differs substantially from the original PAM/8 version.
+                        ;	The H8 Mini multiplexes the LED panel refresh with keypad reads. Reading a
+                        ;	keystroke, therefore, is broken into two components: an interrupt-time
+                        ;	service routine (PCK) and a task-time routine to return the result (RCK).
+                        ;	Probe Console Keypad (PCK) is called at each 2ms interrupt, however it takes
+                        ;	9 calls to scan all possible keys, therefore it can take up to 18ms to
+                        ;	detect and return a keystroke.
+                        ;
+                        ;	RCK performs debouncing, and auto-repeat. a *bip* is sounded
+                        ;	when a value is accepted.
+                        ;
+                        ;	EXIT:	Key value in (A):
+                        ;
+                        ;	Key	  Value (decimal)
+                        ;	0-9		0-9
+                        ;	'+'		10
+                        ;	'-'		11
+                        ;	'*'		12
+                        ;	'/'		13
+                        ;	'#'		14
+                        ;	'.'		15
+                        ;
+                        ;	USES	A,F
+                        ;
+   0648   e5            RCK:	PUSH	H
+   0649   c5            	PUSH	B
+                        	
+   064a   0e 28         	MVI	C,ARDLY/DBDLY	; loop for auto-repeat
+   064c   21 16 20      	LXI	H,RCKA		; point to keypad byte
+                        ;
+                        ;	First wait for some keyboard action
+                        ;
+   064f   3a 34 20      RCK1:	LDA	PCKVAL		; check key hit (possibly 0FFH = "no key")
+   0652   47            	MOV	B,A		; save it
+   0653   3e 05         	MVI	A,DBDLY/2	; delay to debounce
+   0655   cd 53 00      	CALL	DLY
+   0658   78            	MOV	A,B		; get back candidate
+                        	
+   0659   be            	CMP	M		; compare to RCKA
+   065a   c2 61 06      	JNZ	RCK2		; have a change
+   065d   0d            	DCR	C		; wait N cycles (auto repeat)
+   065e   c2 4f 06      	JNZ	RCK1		; changed, start over
+                        
+   0661   77            RCK2:	MOV	M,A		; save it in RCKA
+   0662   b7            	ORA	A		; set flag bits
+   0663   fa 4f 06      	JM	RCK1		; bit 7 set - must be "no key"
+                        ;
+                        ;	Have a key!  Make a "bip" and return
+                        ;	
+   0666   47            	MOV	B,A		; (B) = code
+                        	
+                        ;	MVI	A,0FFH		; handshake with PCK
+                        ;	STA	PCKVAL		; tell it we've read the key
+                        	
+   0667   3e 06         	MVI	A,12/2		; 12ms noise
+   0669   cd 74 02      	CALL	HORN		; "bip"
+                        	
+   066c   78            	MOV	A,B		; get back our code
+                        ;
+   066d   e6 0f         	ANI	00001111B	; mask to 4 bits
+                        	
+   066f   c1            	POP	B
+   0670   e1            	POP	H
+   0671   c9            	RET
+                        
+                        ;	DISPLAY SEGMENT CODING:
+                        ;
+                        ;	BYTE = 76 5453 210
+                        ;
+                        ;	   1
+                        ;	  ---
+                        ;	6|   |2
+                        ;	 | 0 |
+                        ;	  ---
+                        ;	5|   |3
+                        ;	 |   |
+                        ;	  --- o7
+                        ;	   4
+                        
+                        ;	Register index to 7-segment pattern
+                        ;
+                        ;	NOTE: H8 Mini is inverse of H8
+                        
+   0672   5b 67         DSPA:	DW	675BH		; SP
+   0674   6f 63         	DW	636FH		; AF
+   0676   79 72         	DW	7279H		; BC
+   0678   3d 73         	DW	733DH		; DE
+   067a   6d 70         	DW	706DH		; HL
+   067c   67 31         	DW	3167H		; PC
+                        
+                        ;	Octal to 7-segment pattern
+                        ;
+                        ;	NOTE: H8 Mini is inverse of H8
+                        
+                        
+   067e   7e            DODA:	DB	7EH		; 0
+   067f   0c            	DB	0CH		; 1
+   0680   37            	DB	37H		; 2
+   0681   1f            	DB	1FH		; 3
+   0682   4d            	DB	4DH		; 4
+   0683   5b            	DB	5BH		; 5
+   0684   7b            	DB	7BH		; 6
+   0685   0e            	DB	0EH		; 7
+   0686   7f            	DB	7FH		; 8
+   0687   5f            	DB	5FH		; 9
+                        
+                        ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	Tape routines from PAM/8 - these are specific to the H8 hardware
+                        ;	and need to be either removed or rewritten 
+                        ;	
+                        ;
+                        ;	CRC - COMPUTE CRC-16
+                        ;
+                        ;	CRC COMPUTES A CRC-16 CHECKSUM FOR THE POLYNOMIAL
+                        ;
+                        ;	(X + 1) * (X^15 + X + 1)
+                        ;
+                        ;	SINCE THE CHECKSUM GENERATED IS A DIVISION REMAINDER,
+                        ;	A CHECKSUMED DATA SEQUENCE CAN BE VERIFIED BY RUNNING
+                        ;	THE DATA THROUGH CRC, AND THEN RUNNING THE PREVIOUSLY OBTAINED
+                        ;	CHECKSUM THROUGH CRC. THE RESULTANT CHECKSUM SHOULD BE 0.
+                        ;
+                        ;	ENTRY	(CRCSUM) = CURRENT CHECKSUM
+                        ;		(A) = BYTE
+                        ;	EXIT	(CRCSUM) UPDATED
+                        ;		(A) UNCHANGED
+                        ;	USES	F
+                        
+   0688   c5            CRC	PUSH	B		; SAVE (BC)
+   0689   06 08         	MVI	B,8		; (B) = BIT COUNT
+   068b   e5            	PUSH	H
+   068c   2a 17 20      	LHLD	CRCSUM
+   068f   07            CRC1	RLC
+   0690   4f            	MOV	C,A		; (C) = BIT
+   0691   7d            	MOV	A,L
+   0692   87            	ADD	A
+   0693   6f            	MOV	L,A
+   0694   7c            	MOV	A,H
+   0695   17            	RAL
+   0696   67            	MOV	H,A
+   0697   17            	RAL
+   0698   a9            	XRA	C
+   0699   0f            	RRC
+   069a   d2 a5 06      	JNC	CRC2		; IF NOT TO XOR
+   069d   7c            	MOV	A,H
+   069e   ee 80         	XRI	200Q
+   06a0   67            	MOV	H,A
+   06a1   7d            	MOV A,L
+   06a2   ee 05         	XRI	5Q
+   06a4   6f            	MOV	L,A
+   06a5   79            CRC2	MOV	A,C
+   06a6   05            	DCR	B
+   06a7   c2 8f 06      	JNZ	CRC1		; IF MORE TO GO
+   06aa   22 17 20      	SHLD	CRCSUM
+   06ad   e1            	POP	H		; RESTORE (HL)
+   06ae   c1            	POP	B		; RESTORE (BC)
+   06af   c9            	RET			; EXIT
+                        
+                        ;	RMEM - LOAD MEMORY FROM TAPE
+                        ;
+                        
+   06b0   21 8a 07      RMEM	LXI	H,TPABT
+   06b3   22 19 20      	SHLD	TPERRX		; SETUP ERROR EXIT ADDRESS
+   06b6   c3 b9 06      	JMP	LOAD
+                        
+                        ;	LOAD - LOAD MEMORY FROM TAPE
+                        ;
+                        ;	READ THE NEXT RECORD FROM THE CASSETTE TAPE.
+                        ;
+                        ;	USE THE LOAD ADDRESS IN THE TAPE RECORD.
+                        ;
+                        ;	ENTRY	(HL) = ERROR EXIT ADDRESS
+                        ;	EXIT	USER P-REG (IN STACK) SET TO ENTRY ADDRESS
+                        ;		TO CALLER IF ALL OK
+                        ;		TO ERROR EXIT IF TAPE ERRORS DETECTED.
+                        
+   06b9   01 00 fe      LOAD	LXI	B,177000Q	 ; 400Q-RT.MI*256-256 (BC) = - REQUIRED TYPE AND #
+   06bc   cd 9b 07      LOA0	CALL	SRS		; SCAN FOR RECORD START
+   06bf   6f            	MOV	L,A		; (HL) = COUNT
+   06c0   eb            	XCHG			; (DE) = COUNT, (HL) = TYPE AND #
+   06c1   0d            	DCR	C		; (C) = - NEXT #
+   06c2   09            	DAD	B
+   06c3   7c            	MOV	A,H
+   06c4   c5            	PUSH	B		; SAVE TYPE AND #
+   06c5   f5            	PUSH	PSW		; SAVE TYPE CODE
+   06c6   e6 7f         	ANI	177Q		; CLEAR END FLAG BIT
+   06c8   b5            	ORA	L
+   06c9   3e 02         	MVI	A,2		; SEQUENCE ERROR
+   06cb   c2 6b 07      	JNZ	TPERR		; IF NOT RIGHT TYPE OF SEQUENCE
+   06ce   cd bb 07      	CALL	RNP		; READ ADDR
+   06d1   44            	MOV	B,H
+   06d2   4f            	MOV	C,A		; (BC) = P-REG ADDRESS
+   06d3   3e 0a         	MVI	A,10
+   06d5   d5            	PUSH	D		; SAVE (DE)
+   06d6   cd 9d 02      	CALL	LRA.		; LOCATE REG ADDRESS
+   06d9   d1            	POP	D		; RESTORE (DE)
+   06da   71            	MOV	M,C		; SET P-REG IN MEM
+   06db   23            	INX	H
+   06dc   70            	MOV	M,B
+   06dd   cd bb 07      	CALL	RNP		; READ ADDRESS
+   06e0   6f            	MOV	L,A		; (HL) = ADDRESS, (DE) = COUNT
+   06e1   22 00 20      	SHLD	START
+                        
+   06e4   cd bf 07      LOA1	CALL	RNB		; READ BYTE
+   06e7   77            	MOV	M,A
+   06e8   22 14 20      	SHLD	ABUSS		; SET ABUSS FOR DISPLAY
+   06eb   23            	INX	H
+   06ec   1b            	DCX	D
+   06ed   7a            	MOV	A,D
+   06ee   b3            	ORA	E
+   06ef   c2 e4 06      	JNZ	LOA1		; IF MORE TO GO
+                        
+   06f2   cd 60 07      	CALL	CTC		; CHECK TAPE CHECKSUM
+                        
+                        ;	READ NEXT BLOCK
+                        
+   06f5   f1            	POP	PSW		; (A) = FILE TYPE BYTE
+   06f6   c1            	POP	B		; (BC) = -(LAST TYPE, LAST #0
+   06f7   07            	RLC
+   06f8   da 5d 07      	JC	TFT		; ALL DONE - TURN OFF TAPE
+   06fb   c3 bc 06      	JMP	LOA0		; READ ANOTHER RECORD
+                        ;	DUMP - DUMP MEMORY TO MAG TAPE.
+                        ;
+                        ;	DUMP SPECIFIED MEMORY RANGE TO MAG TAPE.
+                        ;
+                        ;	ENTRY	(START) = START ADDRESS
+                        ;		(ABUSS) = END ADDRESS
+                        ;		USER PC = ENTRY POINT ADDRESS
+                        ;	EXIT	TO CALLER.
+                        
+   06fe   21 8a 07      WMEM	LXI	H,TPABT
+   0701   22 19 20      	SHLD	TPERRX		; TAPE ERROR EXIT
+                        
+   0704   3e 01         DUMP	MVI	A,UCI.TE
+   0706   d3 f9         	OUT	OP.TPC		; SETUP TAPE CONTROL
+   0708   3e 16         	MVI	A,A.SYN
+   070a   26 20         	MVI	H,32		; (H) = # OF SYNC CHARACTERS
+   070c   cd d2 07      WME1	CALL	WNB
+   070f   25            	DCR	H
+   0710   c2 0c 07      	JNZ	WME1		; WRITE SYN HEADER
+   0713   3e 02         	MVI	A,A.STX
+   0715   cd d2 07      	CALL	WNB		; WRITE STX
+   0718   6c            	MOV	L,H		; (HL) = 00
+   0719   22 17 20      	SHLD	CRCSUM		; CLEAR CRC 16
+   071c   21 01 81      	LXI	H,100401Q	; RT.MI+80H*256+1 FIRST AND LAST MI RECORD
+   071f   cd cd 07      	CALL	WNP
+   0722   2a 00 20      	LHLD	START
+   0725   eb            	XCHG			; (D,E) = START ADDRESS
+   0726   2a 14 20      	LHLD	ABUSS		; (H,L) = STOP ADDR
+   0729   23            	INX	H		; COMPUTE WITH STOP+1
+   072a   7d            	MOV	A,L
+   072b   93            	SUB	E
+   072c   6f            	MOV	L,A
+   072d   7c            	MOV	A,H
+   072e   9a            	SBB	D
+   072f   67            	MOV	H,A		; (HL) = COUNT
+   0730   cd cd 07      	CALL	WNP		; WRITE COUNT
+   0733   e5            	PUSH	H
+   0734   3e 0a         	MVI	A,10
+   0736   d5            	PUSH	D		; SAVE (DE)
+   0737   cd 9d 02      	CALL	LRA.		; LOCATE P-REG ADDRESS
+   073a   7e            	MOV	A,M
+   073b   23            	INX	H
+   073c   66            	MOV	H,M
+   073d   6f            	MOV	L,A		; (HL) = CONTENTS OF PC
+   073e   cd cd 07      	CALL	WNP		; WRITE HEADER
+   0741   e1            	POP	H		; (HL) = ADDRESS
+   0742   d1            	POP	D		; (DE) = COUNT
+   0743   cd cd 07      	CALL	WNP
+                        
+   0746   7e            WME2	MOV	A,M
+   0747   cd d2 07      	CALL	WNB		; WRITE BYTE
+   074a   22 14 20      	SHLD	ABUSS		; SET ADDRESS FOR DISPLAY
+   074d   23            	INX	H
+   074e   1b            	DCX	D
+   074f   7a            	MOV	A,D
+   0750   b3            	ORA	E
+   0751   c2 46 07      	JNZ	WME2		; IF MORE TO GO
+                        
+                        ;	WRITE CHECKSUM
+                        
+   0754   2a 17 20      	LHLD	CRCSUM
+   0757   cd cd 07      	CALL	WNP		; WRITE IT
+   075a   cd cd 07      	CALL	WNP		; FLUSH CHECKSUM
+                        ;	JMP	TFT
+                        
+                        ;	TFT - TURN OFF TAPE.
+                        ;
+                        ;	STOP THE TAPE TRANSPORT.
+                        ;
+                        
+   075d   af            TFT	XRA	A
+   075e   d3 f9         	OUT	OP.TPC		; TURN OFF TAPE
+                        
+                        ;	CTC - VERIFY CHECKSUM.
+                        ;
+                        ;	ENTRY	TAPE JUST BEFORE CRC
+                        ;	EXIT	TO CALLER IF OK
+                        ;		TO *TPERR* IF BAD
+                        ;	USES	A,F,H,L
+                        
+   0760   cd bb 07      CTC	CALL	RNP		; READ NEXT PAIR
+   0763   2a 17 20      	LHLD	CRCSUM
+   0766   7c            	MOV	A,H
+   0767   b5            	ORA	L
+   0768   c8            	RZ			; RETURN IF OK
+   0769   3e 01         	MVI	A,1		; CHECKSUM ERROR
+                        ;	JMP	TPERR		; (B) = CODE
+                        
+                        ;	TPERR - PROCESS TAPE ERROR.
+                        ;
+                        ;	DISPLAY ERR NUMBER IN LOW BYTE OF ABUSS
+                        ;
+                        ;	IF ERROR NUMBER EVEN, DON'T ALLOW #
+                        ;	IF ERROR NUMBER ODD, ALLOW #
+                        ;
+                        ;	ENTRY	(A) = NUMBER
+                        
+   076b   32 14 20      TPERR	STA	ABUSS
+   076e   47            	MOV	B,A		; (B) = CODE
+   076f   cd 5d 07      	CALL	TFT		; TURN OFF TAPE
+                        
+                        ;	IS #, RETURN (IF PARITY ERROR)
+                        
+   0772   e6            	DB	MI.ANI		; FALL THROUGH WITH CARRY CLEAR
+   0773   78            TER3	MOV	A,B
+                        
+   0774   0f            	RRC
+   0775   d8            	RC			; RETURN IF OK
+                        
+                        ;	BEEP AND FLASH ERROR NUMBER
+                        
+   0776   dc 72 02      TER1	CC	ALARM		; ALARM IF PROPER TIME
+   0779   cd 90 07      	CALL	TPXIT		; SEE IF #
+   077c   db f0         	IN	IP.PAD
+   077e   fe 2f         	CPI	00101111B	; CHECK FOR #
+   0780   ca 73 07      	JZ	TER3		; IF #
+   0783   3a 1c 20      	LDA	TICCNT+1
+   0786   1f            	RAR			; 'C' SET IF 1/2 SECOND
+   0787   c3 76 07      	JMP	TER1
+                        
+                        ;	TPABT - ABORT TAPE LOAD OR DUMP.
+                        ;
+                        ;	ENTERED WHEN LOADING OR DUMPING, AND THE '*' KEY
+                        ;	IS STRUCK.
+                        
+   078a   af            TPABT	XRA	A
+   078b   d3 f9         	OUT	OP.TPC		; OFF TAPE
+   078d   c3 92 01      	JMP	ERROR
+                        
+                        ;	TPXIT - CHECK FOR USER FORCED EDIT.
+                        ;
+                        ;	TPXIT CHECKS FOR AN `*` KEYPAD ENTRY. IF SO, TAKE
+                        ;	THE TAPE DRIVER ABNORMAL EXIT.
+                        ;
+                        ;	ENTRY	NONE
+                        ;	EXIT	TO *RET* IF NOT '*'
+                        ;		(A) = PORT STATUS
+                        ;		TO (TPERRX) IF '*' DOWN
+                        ;	USES	A,F
+                        
+   0790   db f0         TPXIT	IN	IP.PAD
+   0792   fe 6f         	CPI	01101111B	; *
+   0794   db f9         	IN	IP.TPC		; READ TAPE STATUS
+   0796   c0            	RNZ			; NOT '*', RETURN WITH STATUS
+   0797   2a 19 20      	LHLD	TPERRX
+   079a   e9            	PCHL			; ENTER (TPERRX)
+                        
+                        ;	SRS - SCAN RECORD START
+                        ;
+                        ;	SRS READS BYTES UNTIL IT RECOGNIZES THE START OF A RECORD.
+                        ;
+                        ;	THIS REQUIRES
+                        ;	AT LEAST 10 SYNC CHARACTERS
+                        ;	1 STX CHARACTER
+                        ;
+                        ;	THE CRC-16 IS THEN INITIALIZED.
+                        ;
+                        ;	ENTRY	NONE
+                        ;	EXIT	TAPE POSITIONED (AND MOVING), CRCSUM=0
+                        ;		(DE) = HEADER BYTES
+                        ;		(HL) = RECORD COUNT
+                        ;	USES	A,F,D,E,H,L
+                        
+   079b                 SRS
+   079b   16 00         SRS1	MVI	D,0
+   079d   62            	MOV	H,D
+   079e   6a            	MOV	L,D		; (HL) = 0
+   079f   cd bf 07      SRS2	CALL	RNB		; READ NEXT BYTE
+   07a2   14            	INR	D
+   07a3   fe 16         	CPI	A.SYN
+   07a5   ca 9f 07      	JZ	SRS2		; HAVE SYN
+   07a8   fe 02         	CPI	A.STX
+   07aa   c2 9b 07      	JNZ	SRS1		; NOT STX - START OVER
+                        
+   07ad   3e 0a         	MVI	A,10
+   07af   ba            	CMP	D		; SEE IF ENOUGH SYNC CHARACTERS
+   07b0   d2 9b 07      	JNC	SRS1		; NOT ENOUGH
+   07b3   22 17 20      	SHLD	CRCSUM		; CLEAR CRC-16
+   07b6   cd bb 07      	CALL	RNP		; READ LEADER
+   07b9   54            	MOV	D,H
+   07ba   5f            	MOV	E,A
+                        ;	JMP	RNP		; READ COUNT
+                        
+                        ;	RNP - READ NEXT PAIR.
+                        ;
+                        ;	RNP READS THE NEXT TWO BYTES FROM THE INPUT DEVICE.
+                        ;
+                        ;	ENTRY	NONE
+                        ;	EXIT	(H,A) = BYTE PAIR
+                        ;	USES	A,F,H
+                        
+   07bb   cd bf 07      RNP	CALL	RNB		; READ NEXT BYTE
+   07be   67            	MOV	H,A
+                        ;	JMP	RNB		; READ NEXT BYTE
+                        
+                        ;	RNB - READ NEXT BYTE
+                        ;
+                        ;	RNB READS THE NEXT SINGLE BYTE FROM THE INPUT DEVICE.
+                        ;	THE CHECKSUM IS TAKEN FOR THE CHARACTER.
+                        ;
+                        ;	ENTRY	NONE
+                        ;	EXIT	(A) = CHARACTER
+                        ;	USES	A,F
+                        
+   07bf   3e 34         RNB	MVI	A,UCI.RO+UCI.ER+UCI.RE ; TURN ON READER FOR NEXT BYTE
+   07c1   d3 f9         	OUT	OP.TPC
+   07c3   cd 90 07      RNB1	CALL	TPXIT		; CHECK FOR *, READ STATUS
+   07c6   e6 02         	ANI	USR.RXR
+   07c8   ca c3 07      	JZ	RNB1		; IF NOT READY
+   07cb   db f8         	IN	IP.TPD		; INPUT DATA
+                        ;	JMP	CRC		; CHECKSUM
+                        
+                        
+                        ;	WNP - WRITE NEXT PAIR
+                        ;
+                        ;	WNP WRITE THE NEXT TWO BYTES TO THE CASSETTE DRIVE.
+                        ;
+                        ;	ENTRY	(H,L) = BYTES
+                        ;	EXIT	WRITTEN.
+                        ;	USES	A,F
+                        
+   07cd   7c            WNP	MOV	A,H
+   07ce   cd d2 07      	CALL	WNB
+   07d1   7d            	MOV	A,L
+                        ;	JMP	WNB		; WRITE NEXT BYTE
+                        
+                        ;	WNB - WRITE NEXT BYTE
+                        ;
+                        ;	WNB WRITE THE NEXT BYTE TO THE CASSETTE TAPE.
+                        ;
+                        ;	ENTRY	(A) = BYTE
+                        ;	EXIT	NONE.
+                        ;	USES	F
+                        
+   07d2   f5            WNB	PUSH	PSW
+   07d3   cd 90 07      WNB1	CALL	TPXIT		; CHECK FOR #, READ STATUS
+   07d6   e6 01         	ANI	USR.TXR
+   07d8   ca d3 07      	JZ	WNB1		; IF MORE TO GO
+   07db   3e 11         	MVI	A,UCI.ER+UCI.TE ; ENABLE TRANSMITTER
+   07dd   d3 f9         	OUT	OP.TPC		; TURN ON TAPE
+   07df   f1            	POP	PSW
+   07e0   d3 f8         	OUT	OP.TPD		; OUTPUT DATA
+   07e2   c3 88 06      	JMP	CRC		; COMPUTE CRC
+                        
+                        
+                        
+                        ;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        ;
+                        ;	RAM storage
+                        ;
+                        ;=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
+                        
+   2000                 	ORG	2000H	; 8192 = beginning of RAM
+                        
+                        ;
+                        ;	PAM-8 uses the first 64 bytes of RAM for working space
+                        ;
+                        ;	THE FOLLOWING ARE CONTROL CELLS AND FLAGS USED BY THE KEYPAD
+                        ;	MONITOR.
+                        	
+   2000                 START	DS	2	; DUMP STARTING ADDRESS
+                        ;
+                        ;	These two bytes are updated in real time to be either
+                        ;	IN or OUT instructions and the associated port - gfr
+                        ;
+   2002                 IOWRK	DS	2	; IN OR OUT INSTRUCTION
+                        ;
+                        ;	The following locations are initialized from PRSROM - gfr
+                        ;
+   2004                 PRSRAM	DS	1	; RET (from IOWRK)
+                        
+                        ;
+                        ;	REGI:	2	AF
+                        ;		4	BC
+                        ;		6	DE
+                        ;		8	HL
+                        ;		A	Pc
+                        ;
+   2005                 REGI	DS	1	; INDEX OF REGISTER UNDER DISPLAY
+   2006                 DSPROT	DS	1	; PERIOD FLAG BYTE
+   2007                 DSPMOD	DS	1	; DISPLAY MODE (if bit 0 set then in Alter mode)
+                        
+   2008                 MFLAG	DS	1	; USER FLAG OPTIONS
+                        			; SEE *UI.XXX* BITS DESCRIBED AT FRONT
+                        
+   2009                 CTLFLG	DS	1	; FRONT PANEL CONTROL BITS
+   200a                 REFIND	DS	1	; REFRESH INDEX (0 TO 7)
+   0007                 PRSL	EQU	7	; END OF AREA INITIALIZED FROM ROM
+                        
+                        
+                        
+   200b                 FPLEDS			; FRONT PANEL LED PATTERNS
+   200b                 ALEDS	DS	1	; ADDR 0
+   200c                 	DS	1	; ADDR 1
+   200d                 	DS	1	; ADDR 2
+                        
+   200e                 	DS	1	; ADDR 3
+   200f                 	DS	1	; ADDR 4
+   2010                 	DS	1	; ADDR 5
+                        
+   2011                 DLEDS	DS	1	; DATA 0
+   2012                 	DS	1	; DATA 1
+   2013                 	DS	1	; DATA 2
+                        
+   2014                 ABUSS	DS	2	; ADDRESS BUS
+   2016                 RCKA	DS	1	; RCK SAVE AREA
+   2017                 CRCSUM	DS	2	; CRC-16 CHECKSUM
+   2019                 TPERRX	DS	2	; TAPE ERROR EXIT ADDRESS
+   201b                 TICCNT	DS	2	; CLOCK TIC COUNTER
+                        
+   201d                 REGPTR	DS	2	; REGISTER CONTENTS POINTER
+                        
+   201f                 UIVEC			; USER INTERRUPT VECTOR
+   201f                 	DS	3	; JUMP TO CLOCK PROCESSOR
+   2022                 	DS	3	; JUMP TO SINGLE STEP PROCESSOR
+   2025                 	DS	3	; JUMP TO I/O 3
+   2028                 	DS	3	; JUMP TO I/O 4
+   202b                 	DS	3	; JUMP TO I/O 5
+   202e                 	DS	3	; JUMP TO I/O 6
+   2031                 	DS	3	; JUMP TO I/O 7
+                        ;
+                        ;	new RAM locations for MiniPAM8
+                        ;
+   2034                 PCKVAL	DS	1	; PCK value from most recent scan (9 ticks)
+   2035                 PCKTMP	DS	1	; temporary candidate keypad response from PCK
+                        ;
+                        ;	We want to limit our monitor RAM storage to 40H or fewer bytes
+                        ;	so we have only a small serial handler buffer here (2 bytes)
+                        ;	but the user can overwrite these values to make it as
+                        ;	large as need be.
+                        ;
+   2036   39 20         INBADDR	DW	$INBUF	; points to location of input buffer
+   2038   01            INBLEN	DB	$INBUFL	; max length of buffer
+   2039   00            $INBUF	DB	0	; input buffer count
+   203a                 	DS	2	; very small buffer
+   0001                 $INBUFL	EQU	*-$INBUF-2	; max length of buffer
+                        
+                        ;
+                        ;	What to show on the front panel at startup
+                        ;
+   201b                 FPSHOW	EQU	TICCNT
+                        
+                        
+   203c                 	END
+0323  $HLIHL        2039  $INBUF        0001  $INBUFL       0002  A.STX     
+0016  A.SYN         0226  ABORT         2014  ABUSS         0272  ALARM     
+200b  ALEDS         0190  ARDLY         0486  ASCHEX        040c  BITTIME   
+0624  BLANK         062c  BLOOP         0008  BS            0003  CANCEL    
+0040  CB.CLI        0020  CB.MTL        0080  CB.SPK        0010  CB.SSI    
+0066  CI2           006e  CI3           0071  CI4           0087  CI5       
+0099  CI6           046f  CIN           05e5  CINN1         05ef  CINN2     
+05fb  CINN3         05dd  CINNE         005e  CINT          011a  CLK2      
+011f  CLK3          00fd  CLOCK         0423  CMDLP         0435  CMDLP1    
+05ca  CMDTAB        0608  CO1           060f  CO2           0600  COUT      
+000d  CR            0688  CRC           068f  CRC1          06a5  CRC2      
+2017  CRCSUM        04e2  CRLF          050d  CSERR$        05b5  CSUMER    
+0760  CTC           0003  CTLC          2009  CTLFLG        0003  CTRL      
+000a  DBDLY         2011  DLEDS         0053  DLY           0058  DLY2      
+0639  DLYNOI        0000  DM.MR         0001  DM.MW         0002  DM.RR     
+0003  DM.RW         04c8  DMPLOC        02c5  DOD           02ca  DOD1      
+067e  DODA          0672  DSPA          2007  DSPMOD        2006  DSPROT    
+0704  DUMP          0529  EDTCM1        0547  EDTCM2        0526  EDTCMD    
+0513  ERR$          0443  ERRMSG        0192  ERROR         200b  FPLEDS    
+201b  FPSHOW        0455  GETADR        0461  GETHE2        045e  GETHEX    
+0251  GO            054b  GOCMD         0410  GWMON         040e  HALFBIT   
+0518  HDCMD         0282  HDLY1         0284  HDLY2         0475  HEXBYT    
+0497  HEXDM1        049c  HEXDM2        04ad  HEXDM3        0495  HEXDMP    
+0274  HORN          023e  IN            2036  INBADDR       2038  INBLEN    
+00a7  INIT          0000  INIT0         00b7  INIT2         063d  INNER     
+054f  INPCMD        002c  INT5.5        003c  INT7.5        00f0  INTXIT    
+0000  IO.A          0001  IO.B          0002  IO.C          02a5  IOA       
+02a9  IOB           02ab  IOB1          2002  IOWRK         00f0  IP.PAD    
+00f9  IP.TPC        00f8  IP.TPD        0080  K0            0020  KMATH     
+0010  KNUM          0040  KR            0227  LAST          000a  LF        
+06bc  LOA0          06e4  LOA1          06b9  LOAD          0573  LODCM0    
+0576  LODCM1        0595  LODCM2        05a0  LODCM3        05aa  LODCM4    
+056a  LODCMD        05bb  LODEXT        029a  LRA           029d  LRA.      
+022b  LST2          0234  MEMM          2008  MFLAG         00e6  MI.ANI    
+0076  MI.HLT        00db  MI.IN         003a  MI.LDA        0011  MI.LXID   
+00d3  MI.OUT        00c9  MI.RET        01a4  MTR           01a5  MTR1      
+01c4  MTR4          01e8  MTR5          01f6  MTR6          01dc  MTRA      
+0219  NEXT          000d  NEXTLOC       05dc  NULCMD        00f0  OP.CTL    
+00f0  OP.DIG        00f1  OP.SEG        00f9  OP.TPC        00f8  OP.TPD    
+0241  OUT           055c  OUTCMD        063b  OUTER         0009  PAMVER$   
+0129  PCK           0178  PCK1          0146  PCKM          015e  PCKM1     
+0174  PCKN          017b  PCKQ          016b  PCKR          2035  PCKTMP    
+2034  PCKVAL        0186  PCKX          0170  PCKZ          00f0  PPI       
+809e  PPS           009e  PPSROM        050b  PROMPT$       0007  PRSL      
+2004  PRSRAM        03f9  PRSROM        04b8  PRTADR        04ec  PRTCLS    
+0446  PRTERR        04c9  PRTHEX        04d2  PRTNIB        04dd  PRTSPC    
+04ef  PRTSTR        0648  RCK           064f  RCK1          0661  RCK2      
+2016  RCKA          200a  REFIND        2005  REGI          0203  REGM      
+201d  REGPTR        0104  RFP           06b0  RMEM          07bf  RNB       
+07c3  RNB1          07bb  RNP           044c  RUNCMD        0215  RW        
+01f2  SAE           00d5  SAVALL        00fa  SC.UART       04fc  SIGNON$   
+079b  SRS           079b  SRS1          079f  SRS2          025e  SST1      
+0256  SSTEP         8000  STACK         2000  START         0265  STPRTN    
+0776  TER1          0773  TER3          075d  TFT           201b  TICCNT    
+078a  TPABT         076b  TPERR         2019  TPERRX        0790  TPXIT     
+0010  UCI.ER        0002  UCI.IE        0040  UCI.IR        0004  UCI.RE    
+0020  UCI.RO        0001  UCI.TE        0000  UDR           02e4  UFD       
+030a  UFD1          0001  UI.CLK        201f  UIVEC         0002  UMI.16X   
+0040  UMI.1B        0001  UMI.1X        00c0  UMI.2B        0003  UMI.64X   
+0080  UMI.HB        0000  UMI.L5        0004  UMI.L6        0008  UMI.L7    
+000c  UMI.L8        0010  UMI.PA        0020  UMI.PE        0002  UO.DDU    
+0080  UO.HLT        0040  UO.NFR        0001  USR           0040  USR.BD    
+86a0  USR.FE        0010  USR.OE        0008  USR.PE        0002  USR.RXR   
+0004  USR.TXE       0001  USR.TXR       070c  WME1          0746  WME2      
+06fe  WMEM          07d2  WNB           07d3  WNB1          07cd  WNP       
+0420  WSTART        
+

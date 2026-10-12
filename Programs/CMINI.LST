@@ -1,0 +1,229 @@
+                                                  	HEATH ASM #104.06.00
+                                                  	25-Sep-26  Page    1
+
+                        00001   ***	Heath H8 Software Console Driver for the H8 Mini
+                        00002   *
+                        00003   *	Glenn Roberts (GFR), September 2026
+                        00004   *
+                        00005
+   040.100              00006   	ORG	040100A 	Start of User RAM
+                        00007   	
+                        00008   **	Assembly Constants
+                        00009
+   222.222              00010   RESTART EQU	222222A 	Dummy RESTART label
+   333.333              00011   CONFIG	EQU	333333A 	Dummy CONFIG label
+                        00012
+                        00013
+                        00014   ***	CONSL - System Console and I/O Driver.
+                        00015   *
+                        00016   *
+                        00017   *	Notes on H8 Mini Implementation:
+                        00018   *
+                        00019   *	- Interrupt-driven serial console I/O will have already been initiated
+                        00020   *	  by the ROM. We only need to relocate the buffer space here
+                        00021   *
+                        00022   *	- Port I/O probably doesn't make any sense. For now let's ignore these
+                        00023   *	  (mapped to 000Q)
+                        00024
+                        00025
+                        00026   **	Key locations in H8 Mini Firmware
+                        00027
+   004.006              00028   CINNE	EQU	0406H		read character from console
+   004.011              00029   COUT	EQU	0409H		write character to console
+   040.066              00030   INBADDR EQU	2036H		Location of $INBUF
+   040.070              00031   INBLEN	EQU	2038H		Length of buffer
+                        00032
+                        00033   **	I/O Port addresses.
+                        00034
+   000.000              00035   IP.CDP	EQU	000Q		Console data in port
+   000.000              00036   OP.CDP	EQU	000Q		Console data out port
+   000.000              00037   IP.CIS	EQU	000Q		Console input status in port
+   000.000              00038   OP.CIS	EQU	000Q		Console input status out port
+   000.000              00039   IP.COS	EQU	000Q		Console output status in port
+   000.000              00040   OP.COS	EQU	000Q		Console output status out port
+                        00041
+   000.000              00042   IP.TDP	EQU	000Q		Tape data in port
+   000.000              00043   OP.TDP	EQU	000Q		Tape data out port
+   000.000              00044   IP.TSP	EQU	000Q		Tape status in port
+   000.000              00045   OP.TSP	EQU	000Q		Tape status out port
+                        00046
+                        00047
+                        00048   **	$CSCTL (Console Control Flag) bits.
+                        00049   *
+                        00050   *	These bits are set in $CSCTL when the appropriate control
+                        00051   *	characters are struck.
+                        00052   *
+                        00053   *	These can be examined at task time, or when the users control
+                        00054   *	Character routine is entered (at interrupt time)
+                        00055
+   000.001              00056   CC.HLD	EQU	01		Suspend output
+   000.002              00057   CC.DMP	EQU	02		Discard output
+                                                  	HEATH ASM #104.06.00
+                                                  	25-Sep-26  Page    2
+
+   000.010              00058   CC.CTLA EQU	010Q		Ctl-A
+   000.020              00059   CC.CTLB EQU	020Q		Ctl-B
+   000.040              00060   CC.CTLC EQU	040Q		Ctl-C
+   000.100              00061   CC.CTLD EQU	100Q		Ctl-D
+                        00062
+                        00063   **	Program Entry Points
+                        00064
+   040.100  303 333 333 00065   ENTRY	JMP	CONFIG
+                        00066
+   040.103  303 222 222 00067   RTN22	JMP	RESTART 	warm start
+                        00068
+                        00069   **	Port Routines.
+                        00070   *
+                        00071   *	All programs must use these routines, to allow port address
+                        00072   *	changeability.
+                        00073
+   040.106  333 000     00074   $CDIN	IN	IP.CDP		Console Data In
+   040.110  311         00075   $RET	RET
+                        00076
+   040.111  323 000     00077   $CDOUT	OUT	OP.CDP		Console Data Out
+   040.113  311         00078   	RET
+                        00079
+   040.114  333 000     00080   $CISI	IN	IP.CIS		Console Input Status In
+   040.116  311         00081   	RET
+                        00082
+   040.117  323 000     00083   $CISO	OUT	OP.CIS		Console Input Status Out
+   040.121  311         00084   	RET
+                        00085
+   040.122  333 000     00086   $COSI	IN	IP.COS		Console Output Status In
+   040.124  311         00087   	RET
+                        00088
+   040.125  323 000     00089   $COSO	OUT	OP.COS		Console Output Status Out
+   040.127  311         00090   	RET
+                        00091
+   040.130  333 000     00092   $TDIN	IN	IP.TDP		Tape Data In
+   040.132  311         00093   	RET
+                        00094
+   040.133  323 000     00095   $TDOUT	OUT	OP.TDP		Tape Data Out
+   040.135  311         00096   	RET
+                        00097
+   040.136  333 000     00098   $TSIN	IN	IP.TSP		Tape Status In
+   040.140  311         00099   	RET
+                        00100
+   040.141  323 000     00101   $TSOUT	OUT	OP.TSP		Tape Status Out
+   040.143  311         00102   	RET
+                        00103
+                        00104
+                        00105   **	Remote Entry Points for Console Driver.
+                        00106   *
+                        00107
+   040.144  303 255 040 00108   $RCHAR	JMP	$RCHAR.		Read one character	
+                        00109
+   040.147  303 301 040 00110   $WCHAR	JMP	$WCHAR.		Write one character
+                        00111
+   040.152  303 305 040 00112   $PRSCL	JMP	$PRSCL.		Preset Console UART
+                        00113
+                        00114   **	Data and Buffers
+                                                  	HEATH ASM #104.06.00
+                                                  	25-Sep-26  Page    3
+
+                        00115   *
+   040.155  000         00116   $INBUF	DB	0		Input buffer count
+   040.156              00117   	DS	30		Type ahead buffer. First byte = next character.
+                        00118
+   000.035              00119   $INBUFL	EQU	*-$INBUF-2	max length of buffer
+                        00120
+                        00121   **	Control Character Table.
+                        00122   *
+                        00123   *	DB	CHAR,MASK,VALUE
+                        00124   *
+                        00125   *	If char, $CSLCTL = ($CSLCTL .AND. MASK) .OR. VALUE
+                        00126   	
+   040.214  000 377 000 00127   $CSIB	DB	00Q,377Q,000Q	Ctl-@ (00 - NULL)
+   040.217  001 167 210 00128   	DB	01Q,167Q,210Q	Ctl-A
+   040.222  002 157 220 00129   	DB	02Q,157Q,220Q	Ctl-B
+   040.225  003 137 240 00130   	DB	03Q,137Q,240Q	Ctl-C
+   040.230  004 077 300 00131   	DB	04Q,077Q,300Q	Ctl-D
+   040.233  017 177 002 00132   	DB	17Q,177Q,002Q	Ctl-O
+   040.236  020 175 000 00133   	DB	20Q,175Q,000Q	Ctl-P
+   040.241  021 176 000 00134   	DB	21Q,176Q,000Q	Ctl-Q
+   040.244  023 176 001 00135   	DB	23Q,176Q,001Q	Ctl-S
+   040.247  177         00136   	DB	177Q		End of table
+                        00137   	
+   040.250  110 040     00138   $CSIC	DW	$RET		Address of user routine for Ctl-A Through Ctl-D
+                        00139
+   040.252  000         00140   $CSLCTL	DB	0		Console Control Byte
+   040.253  000         00141   COLNO	DB	0		Console cursor position
+   040.254  120         00142   	DB	80		Console width
+                        00143   	
+   000.040              00144   .	SET	$INBUF/1000A
+   000.000              00145   	ERRNZ	*/1000A-.	All data must be in same page
+
+
+
+
+                        00147   **	$RCHAR - Read Single Character.
+                        00148   *
+                        00149   *	$RCHAR is called to read a console character.
+                        00150   *	
+                        00151   *	For backward compatibility (e.g. with original H9 terminal)
+                        00152   *	characters are converted to upper case.
+                        00153   *
+                        00154   *	ENTRY:	None
+                        00155   *	EXIT:	(A) = char
+                        00156   *	USES:	A,F
+                        00157
+                        00158
+   040.255  315 006 004 00159   $RCHAR.	CALL	CINNE		use code in ROM to read console
+   040.260  315 264 040 00160   	CALL	TOUPPER		make upper case
+   040.263  311         00161   	RET
+                        00162
+                        00163   ** TOUPPER - convert lower case to upper
+                        00164   *
+   040.264  376 173     00165   TOUPPER	CPI	'z'+1		see if lower case		
+   040.266  322 300 040 00166   	JNC	TOUP1		greater than 'z' - not lower case
+   040.271  376 141     00167   	CPI	'a'
+   040.273  332 300 040 00168   	JC	TOUP1		less than 'a' - not lower case
+                                                  	HEATH ASM #104.06.00
+                                                  	25-Sep-26  Page    4
+
+   040.276  326 040     00169   	SUI	'a'-'A'		make upper
+   040.300  311         00170   TOUP1	RET
+                        00171
+                        00172
+                        00173   **	$WCHAR - Write Single Character.
+                        00174   *
+                        00175   *	$WCHAR output a single character to the console
+                        00176   *
+                        00177   *	ENTRY:	(A) = character
+                        00178   *	EXIT:	NONE
+                        00179   *	USES:	NONE
+                        00180
+                        00181
+   040.301  315 011 004 00182   $WCHAR.	CALL	COUT		call COUT in monitor
+   040.304  311         00183   	RET
+                        00184
+
+
+
+
+                        00186   **	$PRSCL - Preset Console Drivers.
+                        00187   *
+                        00188   *	Primary job is to move the $INBUF buffer to our own space
+                        00189   *	from the limited (2-byte) one provided by the ROM.
+                        00190   *
+                        00191   *	ENTRY:	NONE
+                        00192   *	EXIT:	NONE
+                        00193   *	USES:	A,F
+                        00194
+                        00195
+   040.305  363         00196   $PRSCL.	DI			hold the interruptions please
+   040.306  041 155 040 00197   	LXI	H,$INBUF	point to our local buffer
+   040.311  066 000     00198   	MVI	M,0		set byte count to zero
+   040.313  042 066 040 00199   	SHLD	INBADDR		inform the monitor of location
+   040.316  076 035     00200   	MVI	A,$INBUFL	buffer length - 2
+   040.320  062 070 040 00201   	STA	INBLEN		inform the monitor
+   040.323  373         00202   	EI			ok, have at it!
+   040.324  311         00203   	RET
+                        00204   	
+   040.325  000         00205   	END	ENTRY
+
+
+00205 Statements Assembled
+39903 Bytes Free
+ No   Errors Detected
+                                                                                                                                                                                                                                                                                                                                                                                                                                                              

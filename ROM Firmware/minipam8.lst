@@ -1,7 +1,7 @@
                         ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
                         ;
                         ;	MiniPAM8 - monitor for H8 Mini
-                        ;	Rev. 0.9.0 Beta
+                        ;	Rev. 00.09.02 Beta
                         ;
                         ;	This is a modified version of PAM/8, originally written by Gordon
                         ;	Letwin 50 years ago! This version is designed to support Lee Hart's
@@ -27,7 +27,11 @@
                         ;	for use with the A85 assembler, 25 July, 2026.
                         ;
                         ;	Other modifications/enhancements by Glenn Roberts (GFR),
-                        ;	Augutst-September, 2026.
+                        ;	August-September, 2026.
+                        ;
+                        ;	Revision History:
+                        ;	0.9.0	initial beta
+                        ;	0.9.1	added interrupt-driven console input buffer
                         ;
                         ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
                         ;
@@ -274,6 +278,11 @@
    0006   c3 a7 00      	JMP	INIT		; INITIALIZE
                         ;	ERRPL	INIT-1000Q	; BYTE IN WORD 10A MUST BE 0
                         
+   0009   4d 49 4e 49   PAMVER$	DB 'MINIPAM 00.09.02 ','B' + 80H
+   000d   50 41 4d 20   
+   0011   30 30 2e 30   
+   0015   39 2e 30 32   
+   0019   20 c2         
                         
                         
                         ;	Interrupt 5.5 - caused by RTM/0 key combination
@@ -352,23 +361,25 @@
                         
                         ;	CINT - serial I/O interrupt handler
                         ;
-                        ;	This interrupt is triggered by a transition from low to
-                        ;	high on the SID line, which is an inverted version of the RX
-                        ;	signal on the serial input header. This transition indicates
-                        ;	the start bit of a 10-bit sequence (start bit, 8-bit data byte
-                        ;	and stop bit). This handler decodes the byte and stores it for
-                        ;	later retrieval, setting a flag to indicate data is ready. There
-                        ;	currently is not a ring buffer so the user application must
-                        ;	poll frequently for data. Since the 2ms interrupt (RST 7.5) is
-                        ;	a higher priority and involves somewhat lengthy processing, its
-                        ;	handler must yield for the RST 6.5 handler to process a byte even
-                        ;	if it is in the middle of a clock update.
+                        ;	This interrupt is triggered by a transition from low to high on the
+                        ;	SID line, which is an inverted version of the RX signal on the serial
+                        ;	input header. This transition indicates the start bit of a 10-bit sequence
+                        ;	(start bit, 8-bit data byte,and stop bit).
                         ;
-                        ;	Use the SID and SOD pins on the Intel 8085 for bit-bang
-                        ;	serial I/O. This driver uses fixed bitrate constants for 
-                        ;	delay routines used to pace serial transmit/receive.
+                        ;	This handler first decodes the byte and stores it in a buffer by
+                        ;	first incrementing the buffer count and then adding the byte to the
+                        ;	tail of the buffer. The task-time code to read data can check the
+                        ;	byte count to see if there is any data in the buffer. Currently this
+                        ;	routine silently discards any overrun bytes.
                         ;
-                        ;	Derived from Intel Application Note AP-29, August 1977.
+                        ;	Since the 2ms interrupt (RST 7.5) is a higher priority and involves
+                        ;	somewhat lengthy processing, its handler must yield for the RST 6.5
+                        ;	handler to process a byte even if it is in the middle of a clock update.
+                        ;
+                        ;	The SID and SOD pins on the Intel 8085 are used for bit-banged serial I/O.
+                        ;	The effective BAUD rate is set by fixed bit rate constants, which are used
+                        ;	to delay between bit samples. For more information consult Intel Application
+                        ;	Note AP-29, August 1977.
                         ;
    005e   f5            CINT:	PUSH	PSW
    005f   c5            	PUSH	B
@@ -408,7 +419,7 @@
    0083   00            	NOP			; Equalize OUT and IN loop times
    0084   c3 6e 00      	JMP	CI3		; Get more bits
                         ;
-                        ;	We now have all 8 bits in (C), attempt to store the byte
+                        ;	We now have all 8 bits in (C), store the byte in the buffer
                         ;
    0087   21 36 20      CI5:	LXI	H,INBADDR	; (HL) = address of buffer
    008a   cd 25 03      	CALL	$HLIHL		; (HL) = buffer
@@ -511,7 +522,7 @@
                         ;
                         ;	Use GWMON as main loop while we debug things...
                         ;
-   00d2   c3 00 04      	JMP	GWMON
+   00d2   c3 0c 04      	JMP	GWMON
                         	
                         ;	JMP	SAVALL		; begin front panel monitor
                         
@@ -865,7 +876,7 @@
                         ;
                         ;	Read a key from the keypad and take appropriate action
                         ;
-   01b2   cd 37 06      	CALL	RCK		; read console keypad
+   01b2   cd 44 06      	CALL	RCK		; read console keypad
    01b5   2a 14 20      	LHLD	ABUSS		; (HL) = ABUSS
    01b8   fe 0a         	CPI	10		; test for [0..9]
    01ba   d2 c4 01      	JNC	MTR4		; everything else is "always valid"
@@ -960,7 +971,7 @@
    0207   af            	XRA	A
    0208   2f            	CMA			; H8 Mini uses '1' for LED segment on - gfr
    0209   02            	STAX	B		; set all periods on
-   020a   cd 37 06      	CALL	RCK		; read key entry
+   020a   cd 44 06      	CALL	RCK		; read key entry
    020d   3d            	DCR	A		; displace
    020e   fe 06         	CPI	6
    0210   d2 92 01      	JNC	ERROR		; not 1-6
@@ -1099,7 +1110,7 @@
    0276   c5            HORN:	PUSH	B		; BC used for working storage
    0277   4f            	MOV	C,A		; C = duration
    0278   f3            	DI			; interrupts off
-   0279   cd 13 06      	CALL	BLANK		; blank the LEDs
+   0279   cd 20 06      	CALL	BLANK		; blank the LEDs
                         ;
                         ;	Set speaker to "high" state
                         ;
@@ -1170,7 +1181,7 @@
                         ;	USES	A,D,E,H,L,F
                         
    02ab   16 03         IOB	MVI	D,3		; (D) = DIGIT COUNT
-   02ad   d4 37 06      IOB1	CNC	RCK		; READ CONSOLE KEYSET
+   02ad   d4 44 06      IOB1	CNC	RCK		; READ CONSOLE KEYSET
                         
    02b0   fe 08         	CPI	8
    02b2   d2 92 01      	JNC	ERROR		; IF ILLEGAL DIGIT
@@ -1204,7 +1215,7 @@
    02ce   17            	RAL
    02cf   f5            	PUSH	PSW		; SAVE FOR NEXT DIGIT
    02d0   e6 07         	ANI	7
-   02d2   c6 66         	ADI	LOW DODA	; HRJ was DODA#256
+   02d2   c6 73         	ADI	LOW DODA	; HRJ was DODA#256
    02d4   5f            	MOV	E,A		; (D) = INDEX
    02d5   1a            	LDAX	D		; (A) = PATTERN
    02d6   a8            	XRA	B
@@ -1253,7 +1264,7 @@
                         
    02fa   cd 9c 02      	CALL	LRA		; LOCATE REGISTER ADDRESS
    02fd   e5            	PUSH	H
-   02fe   21 5a 06      	LXI	H,DSPA
+   02fe   21 67 06      	LXI	H,DSPA
    0301   19            	DAD	D		; (H,L) = ADDRESS OF REG NAME PATTERNS
    0302   7e            	MOV	A,M
    0303   23            	INX	H
@@ -1315,7 +1326,6 @@
                         
                         
                         
-   0400                 	ORG	0400H
                         ;
                         ;	Here is a modified version of Jon Chapman's
                         ;	GWMON. Jumping here invokes the console monitor loop.
@@ -1334,8 +1344,6 @@
                         ;;double semicolons denote changes from Jon Chapman's code
                         ;;resume editing at ------------
                         ;;
-                        ;; other double-semicolon edits by Glenn Roberts marked 'gfr'
-                        
                         ;
                         ;Hardware Equates
                         ;
@@ -1345,19 +1353,32 @@
                         
                         ; get console ready for I/O
                         ;
-   0400                 GWMON	EQU	*
+                        ;
+                        ;	To maintain known entry points for useful routines
+                        ;	we put the appropriate jump instructions here
                         
-   0400   af            	XRA	A		;NUL in A
-   0401   cd ef 05      	CALL	COUT		;Clear the line
+   0400                 	ORG	0400H
                         	
-   0404   21 e6 04      	LXI	H, SIGNON$	;SM signon
-   0407   cd d6 04      	CALL	PRTCLS
+   0400   c3 0c 04      	JMP	GWMON		; 400H - Main monitor entry point
+   0403   c3 1c 04      	JMP	WSTART		; 403H - warm restart
+   0406   c3 d9 05      	JMP	CINNE		; 406H - Read character from console (no echo)
+   0409   c3 fc 05      	JMP	COUT		; 409H - Write character to console
+                        	
+                        
+   040c   af            GWMON:	XRA	A		;NUL in A
+   040d   cd fc 05      	CALL	COUT		;Clear the line
+                        	
+   0410   21 f8 04      	LXI	H, SIGNON$	; SM signon
+   0413   cd e8 04      	CALL	PRTCLS
+                        	
+   0416   21 09 00      	LXI	H, PAMVER$	; report PAM/8 version too
+   0419   cd e8 04      	CALL	PRTCLS
                         ;
                         ;WSTART -- Warm start routine
                         ;
                         ;Falls through to the command processor.
                         ;
-   040a   31 00 80      WSTART: LXI	SP,STACK	; Reload stack pointer
+   041c   31 00 80      WSTART: LXI	SP,STACK	; Reload stack pointer
                         
                         ;
                         ;SCP -- GWMON-80 Small Command Processor
@@ -1375,34 +1396,34 @@
                         ;
                         ;Falls through to ERROR if an invalid command is specified.
                         ;
-   040d   21 0a 04      CMDLP:	LXI	H,WSTART	; (HL) = warm start address
-   0410   e5            	PUSH	H		; prime stack for RET
+   041f   21 1c 04      CMDLP:	LXI	H,WSTART	; (HL) = warm start address
+   0422   e5            	PUSH	H		; prime stack for RET
                         
-   0411   21 f5 04      	LXI	H,PROMPT$	; console prompt
-   0414   cd d6 04      	CALL	PRTCLS		; print it
-   0417   cd 59 04      	CALL	CIN		; wait for single character
-   041a   f6 20         	ORI	20H		; allow lowercase input
+   0423   21 07 05      	LXI	H,PROMPT$	; console prompt
+   0426   cd e8 04      	CALL	PRTCLS		; print it
+   0429   cd 6b 04      	CALL	CIN		; wait for single character
+   042c   f6 20         	ORI	20H		; allow lowercase input
                         ;
                         ;	Command dispatch
                         ;
-   041c   21 b3 05      	LXI	H,CMDTAB-1
-   041f   23            CMDLP1:	INX	H		; Point to next valid command char
-   0420   be            	CMP	M		; match?
-   0421   ca 36 04      	JZ	RUNCMD		; yes, run command handler
-   0424   47            	MOV	B,A		; save user entry
-   0425   7e            	MOV	A,M		; examine command
-   0426   b7            	ORA	A		; set flags
-   0427   78            	MOV	A,B		; restore user entry
-   0428   23            	INX	H		; Get past handler address
-   0429   23            	INX	H
-   042a   c2 1f 04      	JNZ	CMDLP1		; fall through if at end of table
+   042e   21 c5 05      	LXI	H,CMDTAB-1
+   0431   23            CMDLP1:	INX	H		; Point to next valid command char
+   0432   be            	CMP	M		; match?
+   0433   ca 48 04      	JZ	RUNCMD		; yes, run command handler
+   0436   47            	MOV	B,A		; save user entry
+   0437   7e            	MOV	A,M		; examine command
+   0438   b7            	ORA	A		; set flags
+   0439   78            	MOV	A,B		; restore user entry
+   043a   23            	INX	H		; Get past handler address
+   043b   23            	INX	H
+   043c   c2 31 04      	JNZ	CMDLP1		; fall through if at end of table
                         
                         ;
                         ;ERRMSG -- Print generic error message and abort
                         ;
                         ;Falls through to PRTERR.
                         ;
-   042d   21 fd 04      ERRMSG:	LXI	H,ERR$		;Fall through to PRTERR
+   043f   21 0f 05      ERRMSG:	LXI	H,ERR$		;Fall through to PRTERR
                         
                         ;
                         ;PRTERR -- Print a null-terminated error string
@@ -1411,8 +1432,8 @@
                         ;exit: string at HL printed to console
                         ;exit: program execution returned to command loop
                         ;
-   0430   cd d6 04      PRTERR:	CALL	PRTCLS
-   0433   c3 0a 04      	JMP	WSTART		;Warm start, restore SP
+   0442   cd e8 04      PRTERR:	CALL	PRTCLS
+   0445   c3 1c 04      	JMP	WSTART		;Warm start, restore SP
                         
                         ;
                         ;RUNCMD -- Run a command handler from CMDTAB
@@ -1420,13 +1441,13 @@
                         ;entry: H register points to command letter
                         ;exit: control transferred to command handler
                         ;
-   0436   cd c7 04      RUNCMD:	CALL	PRTSPC
-   0439   23            	INX	H		;Point to low handler address
-   043a   5e            	MOV	E,M
-   043b   23            	INX	H
-   043c   56            	MOV	D,M
-   043d   eb            	XCHG
-   043e   e9            	PCHL
+   0448   cd d9 04      RUNCMD:	CALL	PRTSPC
+   044b   23            	INX	H		;Point to low handler address
+   044c   5e            	MOV	E,M
+   044d   23            	INX	H
+   044e   56            	MOV	D,M
+   044f   eb            	XCHG
+   0450   e9            	PCHL
                         
                         ;
                         ;GETADR -- Get a 16-bit address from the console
@@ -1434,11 +1455,11 @@
                         ;pre: none
                         ;post: HL contains address from console
                         ;
-   043f   cd 48 04      GETADR:	CALL	GETHEX
-   0442   67            	MOV	H,A
-   0443   cd 48 04      	CALL	GETHEX
-   0446   6f            	MOV	L,A
-   0447   c9            	RET
+   0451   cd 5a 04      GETADR:	CALL	GETHEX
+   0454   67            	MOV	H,A
+   0455   cd 5a 04      	CALL	GETHEX
+   0458   6f            	MOV	L,A
+   0459   c9            	RET
                         
                         ;
                         ;GETHEX -- Get byte from console as hex
@@ -1449,15 +1470,15 @@
                         ;exit: A register contains byte from hex input
                         ;exit: Carry flag set if non-hex character received
                         ;
-   0448   cd 59 04      GETHEX:	CALL	CIN
-   044b   e5            GETHE2:	PUSH	H
-   044c   67            	MOV	H,A
-   044d   cd 59 04      	CALL	CIN
-   0450   6f            	MOV	L,A
-   0451   cd 5f 04      	CALL	HEXBYT
-   0454   e1            	POP	H
-   0455   da 2d 04      	JC	ERRMSG		;Invalid hex char, abort
-   0458   c9            	RET
+   045a   cd 6b 04      GETHEX:	CALL	CIN
+   045d   e5            GETHE2:	PUSH	H
+   045e   67            	MOV	H,A
+   045f   cd 6b 04      	CALL	CIN
+   0462   6f            	MOV	L,A
+   0463   cd 71 04      	CALL	HEXBYT
+   0466   e1            	POP	H
+   0467   da 3f 04      	JC	ERRMSG		;Invalid hex char, abort
+   046a   c9            	RET
                         ;;end of INCLUDE 'SCP.INC'
                         					
                         ;;	INCLUDE	'common.inc' (included inline)
@@ -1478,8 +1499,8 @@
                         ; exit: received char is in A register
                         ;		received char is echoed
                         ;
-   0459   cd c7 05      CIN:	CALL	CINNE
-   045c   c3 ef 05      	JMP	COUT
+   046b   cd d9 05      CIN:	CALL	CINNE
+   046e   c3 fc 05      	JMP	COUT
                         
                         ;
                         ;HEXBYT -- Convert pair of ASCII characters to byte
@@ -1490,19 +1511,19 @@
                         ;		CY flag set if non-hex character input
                         ;		Z flag set if conversion results in 0x00
                         ;
-   045f   7c            HEXBYT:	MOV	A,H
-   0460   cd 70 04      	CALL	ASCHEX
-   0463   d8            	RC
-   0464   07            	RLC
-   0465   07            	RLC
-   0466   07            	RLC
-   0467   07            	RLC
-   0468   67            	MOV	H,A
-   0469   7d            	MOV	A,L
-   046a   cd 70 04      	CALL	ASCHEX
-   046d   d8            	RC
-   046e   b4            	ORA	H
-   046f   c9            	RET
+   0471   7c            HEXBYT:	MOV	A,H
+   0472   cd 82 04      	CALL	ASCHEX
+   0475   d8            	RC
+   0476   07            	RLC
+   0477   07            	RLC
+   0478   07            	RLC
+   0479   07            	RLC
+   047a   67            	MOV	H,A
+   047b   7d            	MOV	A,L
+   047c   cd 82 04      	CALL	ASCHEX
+   047f   d8            	RC
+   0480   b4            	ORA	H
+   0481   c9            	RET
                         
                         ;
                         ;ASCHEX -- Convert ASCII character to hex nybble
@@ -1511,16 +1532,16 @@
                         ; exit: A register contains nybble
                         ;		CY flag set if ASCII character is invalid hex
                         ;
-   0470   d6 30         ASCHEX:	SUI	'0'		; remove ASCII bias
-   0472   d8            	RC			; Return error if less than 0
-   0473   fe 0a         	CPI	10		; check for hex
-   0475   3f            	CMC			; Clear CY
-   0476   f8            	RM			; if [0..9] ... done
-   0477   e6 5f         	ANI	01011111B	; Upper case
-   0479   d6 07         	SUI	'A'-'9'-1	; ASCII to hex bias
-   047b   fe 10         	CPI	16		; check for hexadecimal range
-   047d   3f            	CMC			; return error if >= 16
-   047e   c9            	RET
+   0482   d6 30         ASCHEX:	SUI	'0'		; remove ASCII bias
+   0484   d8            	RC			; Return error if less than 0
+   0485   fe 0a         	CPI	10		; check for hex
+   0487   3f            	CMC			; Clear CY
+   0488   f8            	RM			; if [0..9] ... done
+   0489   e6 5f         	ANI	01011111B	; Upper case
+   048b   d6 07         	SUI	'A'-'9'-1	; ASCII to hex bias
+   048d   fe 10         	CPI	16		; check for hexadecimal range
+   048f   3f            	CMC			; return error if >= 16
+   0490   c9            	RET
                         
                         ;
                         ;HEXDMP -- Hex dump memory to console
@@ -1532,28 +1553,28 @@
                         ;		DE register pair contains ending address
                         ; exit:	contents of memory printed to console
                         ;
-   047f   06 00         HEXDMP:	MVI	B,0		;Initialize B as completion flag
+   0491   06 00         HEXDMP:	MVI	B,0		;Initialize B as completion flag
                         
-   0481   cd a2 04      HEXDM1:	CALL	PRTADR
-   0484   0e 10         	MVI	C,16		;C = line loop counter
-   0486   cd c7 04      HEXDM2:	CALL	PRTSPC
-   0489   cd b2 04      	CALL	DMPLOC
-   048c   7b            	MOV	A,E		;A = low byte of end address
-   048d   bd            	CMP	L		;Compare current low byte
-   048e   c2 97 04      	JNZ	HEXDM3
-   0491   7a            	MOV	A,D		;A = high byte of end address
-   0492   bc            	CMP	H		;Compare current high byte
-   0493   c2 97 04      	JNZ	HEXDM3
-   0496   05            	DCR	B		;B = nonzero, done
+   0493   cd b4 04      HEXDM1:	CALL	PRTADR
+   0496   0e 10         	MVI	C,16		;C = line loop counter
+   0498   cd d9 04      HEXDM2:	CALL	PRTSPC
+   049b   cd c4 04      	CALL	DMPLOC
+   049e   7b            	MOV	A,E		;A = low byte of end address
+   049f   bd            	CMP	L		;Compare current low byte
+   04a0   c2 a9 04      	JNZ	HEXDM3
+   04a3   7a            	MOV	A,D		;A = high byte of end address
+   04a4   bc            	CMP	H		;Compare current high byte
+   04a5   c2 a9 04      	JNZ	HEXDM3
+   04a8   05            	DCR	B		;B = nonzero, done
                         
-   0497   23            HEXDM3:	INX	H		;Increment current address pointer
-   0498   0d            	DCR	C
-   0499   c2 86 04      	JNZ	HEXDM2		;Print more lines
+   04a9   23            HEXDM3:	INX	H		;Increment current address pointer
+   04aa   0d            	DCR	C
+   04ab   c2 98 04      	JNZ	HEXDM2		;Print more lines
                         
-   049c   78            	MOV	A,B
-   049d   b7            	ORA	A
-   049e   ca 81 04      	JZ	HEXDM1		;Yes, dump more memory
-   04a1   c9            	RET			;No, done
+   04ae   78            	MOV	A,B
+   04af   b7            	ORA	A
+   04b0   ca 93 04      	JZ	HEXDM1		;Yes, dump more memory
+   04b3   c9            	RET			;No, done
                         
                         ;
                         ;PRTADR -- Print an address to the console
@@ -1566,13 +1587,13 @@
                         ;entry: HL pair contains address to print
                         ; exit: HL printed to console as hex
                         ;
-   04a2   cd cc 04      PRTADR: CALL	CRLF
-   04a5   7c            	MOV	A,H
-   04a6   cd b3 04      	CALL	PRTHEX
-   04a9   7d            	MOV	A,L
-   04aa   cd b3 04      	CALL	PRTHEX
-   04ad   3e 3a         	MVI	A,':'
-   04af   c3 ef 05      	JMP	COUT
+   04b4   cd de 04      PRTADR: CALL	CRLF
+   04b7   7c            	MOV	A,H
+   04b8   cd c5 04      	CALL	PRTHEX
+   04bb   7d            	MOV	A,L
+   04bc   cd c5 04      	CALL	PRTHEX
+   04bf   3e 3a         	MVI	A,':'
+   04c1   c3 fc 05      	JMP	COUT
                         
                         ;
                         ;DMPLOC -- Print a byte at HL to console
@@ -1582,7 +1603,7 @@
                         ;pre: HL pair contains address of byte
                         ;post: byte at HL printed to console
                         ;
-   04b2   7e            DMPLOC:	MOV	A,M
+   04c4   7e            DMPLOC:	MOV	A,M
                         
                         ;
                         ;PRTHEX -- Output byte to console as hex
@@ -1592,13 +1613,13 @@
                         ;entry: A register contains byte to be output
                         ; exit: byte is output to console as hex
                         ;
-   04b3   f5            PRTHEX: PUSH	PSW		;Save A register on stack
-   04b4   0f            	RRC			;Rotate high nybble down
-   04b5   0f            	RRC
-   04b6   0f            	RRC
-   04b7   0f            	RRC
-   04b8   cd bc 04      	CALL	PRTNIB		;Print high nybble
-   04bb   f1            	POP	PSW		;Restore A register
+   04c5   f5            PRTHEX: PUSH	PSW		;Save A register on stack
+   04c6   0f            	RRC			;Rotate high nybble down
+   04c7   0f            	RRC
+   04c8   0f            	RRC
+   04c9   0f            	RRC
+   04ca   cd ce 04      	CALL	PRTNIB		;Print high nybble
+   04cd   f1            	POP	PSW		;Restore A register
                         
                         ;
                         ;PRTNIB -- Print hex nybble on console
@@ -1608,12 +1629,12 @@
                         ;entry: A register contains nybble
                         ; exit: nybble printed to console
                         ;
-   04bc   e6 0f         PRTNIB:	ANI	0FH		;Mask off low nybble
-   04be   c6 90         	ADI	90H
-   04c0   27            	DAA
-   04c1   ce 40         	ACI	40H
-   04c3   27            	DAA
-   04c4   c3 ef 05      	JMP	COUT
+   04ce   e6 0f         PRTNIB:	ANI	0FH		;Mask off low nybble
+   04d0   c6 90         	ADI	90H
+   04d2   27            	DAA
+   04d3   ce 40         	ACI	40H
+   04d5   27            	DAA
+   04d6   c3 fc 05      	JMP	COUT
                         
                         ;
                         ;PRTSPC -- Print a space to the console
@@ -1623,8 +1644,8 @@
                         ;pre: none
                         ;post: ASCII space printed to console
                         ;
-   04c7   3e 20         PRTSPC:	MVI	A,' '
-   04c9   c3 ef 05      	JMP	COUT
+   04d9   3e 20         PRTSPC:	MVI	A,' '
+   04db   c3 fc 05      	JMP	COUT
                         
                         ;
                         ;CRLF -- Print a CR, LF
@@ -1634,10 +1655,10 @@
                         ;entry: none
                         ; exit: CR, LF printed to console
                         ;
-   04cc   3e 0d         CRLF:	MVI	A,CR
-   04ce   cd ef 05      	CALL	COUT
-   04d1   3e 0a         	MVI	A,LF
-   04d3   c3 ef 05      	JMP	COUT
+   04de   3e 0d         CRLF:	MVI	A,CR
+   04e0   cd fc 05      	CALL	COUT
+   04e3   3e 0a         	MVI	A,LF
+   04e5   c3 fc 05      	JMP	COUT
                         ;
                         ;PRTCLS -- Print CR, LF, and a high bit terminated string
                         ;
@@ -1646,7 +1667,7 @@
                         ;entry: HL contains pointer to start of string
                         ; exit: CR, LF, and string at HL printed to console
                         ;
-   04d6   cd cc 04      PRTCLS:	CALL	CRLF
+   04e8   cd de 04      PRTCLS:	CALL	CRLF
                         
                         ;
                         ;PRTSTR -- Print a high bit terminated string
@@ -1656,14 +1677,14 @@
                         ;entry: HL contains pointer to start of string
                         ; exit: string at HL printed to console
                         ;
-   04d9   7e            PRTSTR:	MOV	A, M
-   04da   e6 7f         	ANI	07FH		;Strip high bit
-   04dc   cd ef 05      	CALL	COUT
-   04df   7e            	MOV	A,M
-   04e0   b7            	ORA	A		;Set flags
-   04e1   f8            	RM			;High bit set, done
-   04e2   23            	INX	H
-   04e3   c3 d9 04      	JMP	PRTSTR
+   04eb   7e            PRTSTR:	MOV	A, M
+   04ec   e6 7f         	ANI	07FH		;Strip high bit
+   04ee   cd fc 05      	CALL	COUT
+   04f1   7e            	MOV	A,M
+   04f2   b7            	ORA	A		;Set flags
+   04f3   f8            	RM			;High bit set, done
+   04f4   23            	INX	H
+   04f5   c3 eb 04      	JMP	PRTSTR
                         ;;end of INCLUDE 'common.inc'
                         
                         ;; ---------------------
@@ -1674,15 +1695,15 @@
                         ;These strings are terminated by setting the high bit in the
                         ;last character.
                         ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-   04e6   47 57 4d 4f   SIGNON$:	DB 'GWMON-80 1.1 S', 'M' + 80H
-   04ea   4e 2d 38 30   
-   04ee   20 31 2e 31   
-   04f2   20 53 cd      
-   04f5   0a be         PROMPT$:	DB LF, '>' + 80H
-   04f7   43 4b 53 55   CSERR$:		DB 'CKSUM '
-   04fb   4d 20         
-   04fd   45 52 52 4f   ERR$:		DB 'ERRO', 'R' + 80H
-   0501   d2            
+   04f8   47 57 4d 4f   SIGNON$:	DB 'GWMON-80 1.1 S', 'M' + 80H
+   04fc   4e 2d 38 30   
+   0500   20 31 2e 31   
+   0504   20 53 cd      
+   0507   0a be         PROMPT$:	DB LF, '>' + 80H
+   0509   43 4b 53 55   CSERR$:		DB 'CKSUM '
+   050d   4d 20         
+   050f   45 52 52 4f   ERR$:		DB 'ERRO', 'R' + 80H
+   0513   d2            
                         
                         ;;end of INCLUDE 'sm.inc'
                         
@@ -1698,12 +1719,12 @@
                         ;
                         ;HDCMD -- Hex dump command
                         ;
-   0502   cd 3f 04      HDCMD:	CALL	GETADR		;HL = start address
-   0505   eb            	XCHG			;DE = start address
-   0506   cd c7 04      	CALL	PRTSPC
-   0509   cd 3f 04      	CALL	GETADR		;HL = end address
-   050c   eb            	XCHG			;HL = start, DE = end
-   050d   c3 7f 04      	JMP	HEXDMP		;Return through HEXDMP
+   0514   cd 51 04      HDCMD:	CALL	GETADR		;HL = start address
+   0517   eb            	XCHG			;DE = start address
+   0518   cd d9 04      	CALL	PRTSPC
+   051b   cd 51 04      	CALL	GETADR		;HL = end address
+   051e   eb            	XCHG			;HL = start, DE = end
+   051f   c3 91 04      	JMP	HEXDMP		;Return through HEXDMP
                         
                         ;
                         ;EDTCMD -- Edit memory command
@@ -1711,20 +1732,20 @@
                         ;Breaks out to main command loop through GETHEX jump to
                         ;WSTART.
                         ;
-   0510   cd 3f 04      EDTCMD:	CALL	GETADR		;HL = address to open
-   0513   cd a2 04      EDTCM1:	CALL	PRTADR		;Print location address
-   0516   cd c7 04      	CALL	PRTSPC
-   0519   cd b2 04      	CALL	DMPLOC		;Print contents of location
-   051c   cd c7 04      	CALL	PRTSPC
-   051f   cd 59 04      	CALL	CIN		;Get user input
-   0522   fe 0d         	CPI	NEXTLOC		;Check for NEXTLOC character
-   0524   ca 31 05      	JZ	EDTCM2		;Yes, go to next location
-   0527   cd 4b 04      	CALL	GETHE2		;No, process as hex input
-   052a   77            	MOV	M,A
-   052b   cd c7 04      	CALL	PRTSPC
-   052e   cd b2 04      	CALL	DMPLOC		;Print contents of location (verification)
-   0531   23            EDTCM2:	INX	H
-   0532   c3 13 05      	JMP	EDTCM1
+   0522   cd 51 04      EDTCMD:	CALL	GETADR		;HL = address to open
+   0525   cd b4 04      EDTCM1:	CALL	PRTADR		;Print location address
+   0528   cd d9 04      	CALL	PRTSPC
+   052b   cd c4 04      	CALL	DMPLOC		;Print contents of location
+   052e   cd d9 04      	CALL	PRTSPC
+   0531   cd 6b 04      	CALL	CIN		;Get user input
+   0534   fe 0d         	CPI	NEXTLOC		;Check for NEXTLOC character
+   0536   ca 43 05      	JZ	EDTCM2		;Yes, go to next location
+   0539   cd 5d 04      	CALL	GETHE2		;No, process as hex input
+   053c   77            	MOV	M,A
+   053d   cd d9 04      	CALL	PRTSPC
+   0540   cd c4 04      	CALL	DMPLOC		;Print contents of location (verification)
+   0543   23            EDTCM2:	INX	H
+   0544   c3 25 05      	JMP	EDTCM1
                         
                         ;
                         ;GOCMD -- Call out to a specified address
@@ -1733,8 +1754,8 @@
                         ;Called program can return control to GWMON-80 through a RET
                         ;as long as the stack is not disturbed.
                         ;
-   0535   cd 3f 04      GOCMD:	CALL	GETADR		;HL = Address to call
-   0538   e9            	PCHL			;Go to specified address
+   0547   cd 51 04      GOCMD:	CALL	GETADR		;HL = Address to call
+   054a   e9            	PCHL			;Go to specified address
                         
                         ;
                         ;INPCMD -- Input to port command; print value to console
@@ -1742,11 +1763,11 @@
                         ;	Revised to use PAM-8 port I/O routine
                         ;		-gfr
                         ;
-   0539   cd 48 04      INPCMD:	CALL	GETHEX		; Get port from console
-   053c   6f            	MOV	L,A		; save in (L)
-   053d   cd c7 04      	CALL	PRTSPC		; space separator
-   0540   cd 40 02      	CALL	IN		; input via PAM-8 IN routine
-   0543   c3 b3 04      	JMP	PRTHEX		; display the result
+   054b   cd 5a 04      INPCMD:	CALL	GETHEX		; Get port from console
+   054e   6f            	MOV	L,A		; save in (L)
+   054f   cd d9 04      	CALL	PRTSPC		; space separator
+   0552   cd 40 02      	CALL	IN		; input via PAM-8 IN routine
+   0555   c3 c5 04      	JMP	PRTHEX		; display the result
                         
                         ;
                         ;OUTCMD -- Output to port command
@@ -1754,12 +1775,12 @@
                         ;	Revised to use PAM-8 port I/O routine
                         ;		-gfr
                         ;
-   0546   cd 48 04      OUTCMD:	CALL	GETHEX		; get port number
-   0549   6f            	MOV	L,A		; (L) = port
-   054a   cd c7 04      	CALL	PRTSPC		; space separator
-   054d   cd 48 04      	CALL	GETHEX		; get value to output
-   0550   67            	MOV	H,A		; (H) = value
-   0551   c3 43 02      	JMP	OUT		; output via PAM-8 OUT routine
+   0558   cd 5a 04      OUTCMD:	CALL	GETHEX		; get port number
+   055b   6f            	MOV	L,A		; (L) = port
+   055c   cd d9 04      	CALL	PRTSPC		; space separator
+   055f   cd 5a 04      	CALL	GETHEX		; get value to output
+   0562   67            	MOV	H,A		; (H) = value
+   0563   c3 43 02      	JMP	OUT		; output via PAM-8 OUT routine
                         
                         ;
                         ;LODCMD -- Load an Intel HEX file from console
@@ -1777,74 +1798,74 @@
                         ; other interrupts running in anticipation of interrupt-driven serial
                         ; I/O in the future.
                         ;
-   0554   20            LODCMD:	RIM			; Read interrupt mask
-   0555   e6 03         	ANI	00000011B	; leave 5.5 and 6.5 alone
-   0557   f6 0c         	ORI	00001100B	; 7.5 HIGH (interrupts off)
-   0559   30            	SIM			; set new mask
+   0566   20            LODCMD:	RIM			; Read interrupt mask
+   0567   e6 03         	ANI	00000011B	; leave 5.5 and 6.5 alone
+   0569   f6 0c         	ORI	00001100B	; 7.5 HIGH (interrupts off)
+   056b   30            	SIM			; set new mask
                         	
-   055a   cd 13 06      	CALL	BLANK		; blank the LEDs
+   056c   cd 20 06      	CALL	BLANK		; blank the LEDs
                         ;
                         ;	Loop over records
                         ;
-   055d   cd cc 04      LODCM0:	CALL	CRLF		; start a new ouput line
-   0560   cd c7 05      LODCM1:	CALL	CINNE		; read a byte
-   0563   fe 3a         	CPI	':'		; all records start with ':'
-   0565   c2 60 05      	JNZ	LODCM1		; Wait for start colon
+   056f   cd de 04      LODCM0:	CALL	CRLF		; start a new ouput line
+   0572   cd d9 05      LODCM1:	CALL	CINNE		; read a byte
+   0575   fe 3a         	CPI	':'		; all records start with ':'
+   0577   c2 72 05      	JNZ	LODCM1		; Wait for start colon
                         ;
                         ;	Have new record
                         ;
-   0568   cd ef 05      	CALL	COUT		; Print starting colon
-   056b   cd 48 04      	CALL	GETHEX		; Get record length
-   056e   ca 94 05      	JZ	LODCM4		; Length == 0, done
-   0571   47            	MOV	B,A		; Record length in B
-   0572   4f            	MOV	C,A		; Start checksumming in C
+   057a   cd fc 05      	CALL	COUT		; Print starting colon
+   057d   cd 5a 04      	CALL	GETHEX		; Get record length
+   0580   ca a6 05      	JZ	LODCM4		; Length == 0, done
+   0583   47            	MOV	B,A		; Record length in B
+   0584   4f            	MOV	C,A		; Start checksumming in C
                         
-   0573   cd 3f 04      	CALL	GETADR		; HL = 16-bit starting address
-   0576   81            	ADD	C		; A == L from GETADR
-   0577   84            	ADD	H
-   0578   4f            	MOV	C,A		; Checksum
+   0585   cd 51 04      	CALL	GETADR		; HL = 16-bit starting address
+   0588   81            	ADD	C		; A == L from GETADR
+   0589   84            	ADD	H
+   058a   4f            	MOV	C,A		; Checksum
                         
-   0579   cd 48 04      	CALL	GETHEX		; Get record type
-   057c   c2 94 05      	JNZ	LODCM4		; Not Record Type 00 (DATA), done
+   058b   cd 5a 04      	CALL	GETHEX		; Get record type
+   058e   c2 a6 05      	JNZ	LODCM4		; Not Record Type 00 (DATA), done
                         ;
                         ;	Process the record
                         ;
-   057f   cd 48 04      LODCM2:	CALL	GETHEX		; This record processing loop
-   0582   77            	MOV	M,A		; Store char at HL
-   0583   81            	ADD	C
-   0584   4f            	MOV	C,A		; update checksum
-   0585   23            	INX	H		; point to next destination
-   0586   05            	DCR	B		; decrement the line count
-   0587   c2 7f 05      	JNZ	LODCM2		; Not done with the line
+   0591   cd 5a 04      LODCM2:	CALL	GETHEX		; This record processing loop
+   0594   77            	MOV	M,A		; Store char at HL
+   0595   81            	ADD	C
+   0596   4f            	MOV	C,A		; update checksum
+   0597   23            	INX	H		; point to next destination
+   0598   05            	DCR	B		; decrement the line count
+   0599   c2 91 05      	JNZ	LODCM2		; Not done with the line
                         	
-   058a   cd 48 04      LODCM3:	CALL	GETHEX		; Get checksum byte
-   058d   81            	ADD	C
-   058e   c2 9f 05      	JNZ	CSUMER		; Checksum bad, print error
-   0591   c3 5d 05      	JMP	LODCM0		; Process more records
+   059c   cd 5a 04      LODCM3:	CALL	GETHEX		; Get checksum byte
+   059f   81            	ADD	C
+   05a0   c2 b1 05      	JNZ	CSUMER		; Checksum bad, print error
+   05a3   c3 6f 05      	JMP	LODCM0		; Process more records
                         ;
                         ;	Done getting data, eat remaining characters.
                         ;
-   0594   cd 59 04      LODCM4:	CALL	CIN		; grab a byte
-   0597   fe 0a         	CPI	LF		; end of line?
-   0599   c2 94 05      	JNZ	LODCM4		; No LF, keep eating
-   059c   c3 a5 05      	JMP	LODEXT		; Got LF, done!
+   05a6   cd 6b 04      LODCM4:	CALL	CIN		; grab a byte
+   05a9   fe 0a         	CPI	LF		; end of line?
+   05ab   c2 a6 05      	JNZ	LODCM4		; No LF, keep eating
+   05ae   c3 b7 05      	JMP	LODEXT		; Got LF, done!
                         ;
                         ;	Checksum error
                         ;
-   059f   21 f7 04      CSUMER:	LXI	H,CSERR$	; Print checksum error to console
-   05a2   cd 30 04      	CALL	PRTERR
+   05b1   21 09 05      CSUMER:	LXI	H,CSERR$	; Print checksum error to console
+   05b4   cd 42 04      	CALL	PRTERR
                         ;
                         ;	Exit, reenable clock interrupts and LED refresh.
                         ;
-   05a5   20            LODEXT:	RIM			; Read interrupt mask
-   05a6   e6 03         	ANI	00000011B	; leave 5.5 and 6.5 alone
-   05a8   f6 08         	ORI	00001000B	; 7.5 LOW (interrupts on)
-   05aa   30            	SIM			; set new mask
+   05b7   20            LODEXT:	RIM			; Read interrupt mask
+   05b8   e6 03         	ANI	00000011B	; leave 5.5 and 6.5 alone
+   05ba   f6 08         	ORI	00001000B	; 7.5 LOW (interrupts on)
+   05bc   30            	SIM			; set new mask
                         
-   05ab   3a 08 20      	LDA	MFLAG		; get MFLAG byte
-   05ae   e6 bf         	ANI	377Q-UO.NFR	; turn on FP refresh
-   05b0   32 08 20      	STA	MFLAG		; save it
-   05b3   c9            	RET			; and done...
+   05bd   3a 08 20      	LDA	MFLAG		; get MFLAG byte
+   05c0   e6 bf         	ANI	377Q-UO.NFR	; turn on FP refresh
+   05c2   32 08 20      	STA	MFLAG		; save it
+   05c5   c9            	RET			; and done...
                         
                         ;
                         ;	CMDTAB -- Table/array of commands
@@ -1853,20 +1874,20 @@
                         ;	  * Single command character, lowercase only (0x00 = end)
                         ;	  * Pointer to implementation routine
                         ;
-   05b4   64            CMDTAB:	DB	'd'
-   05b5   02 05         	DW	HDCMD
-   05b7   65            	DB	'e'
-   05b8   10 05         	DW	EDTCMD
-   05ba   67            	DB	'g'
-   05bb   35 05         	DW	GOCMD
-   05bd   69            	DB	'i'
-   05be   39 05         	DW	INPCMD
-   05c0   6c            	DB	'l'
-   05c1   54 05         	DW	LODCMD
-   05c3   6f            	DB	'o'
-   05c4   46 05         	DW	OUTCMD
+   05c6   64            CMDTAB:	DB	'd'
+   05c7   14 05         	DW	HDCMD
+   05c9   65            	DB	'e'
+   05ca   22 05         	DW	EDTCMD
+   05cc   67            	DB	'g'
+   05cd   47 05         	DW	GOCMD
+   05cf   69            	DB	'i'
+   05d0   4b 05         	DW	INPCMD
+   05d2   6c            	DB	'l'
+   05d3   66 05         	DW	LODCMD
+   05d5   6f            	DB	'o'
+   05d6   58 05         	DW	OUTCMD
                         	
-   05c6   00            NULCMD:	DB	0		; terminate command list
+   05d8   00            NULCMD:	DB	0		; terminate command list
                         
                         				;;end of INCLUDE 'scmdnull.inc'
                         ;;---------------
@@ -1883,96 +1904,48 @@
                         ;	This is a blocking read. We wait until a character is available.
                         ;	Since serial I/O is interrupt-driven we simply look to see if
                         ;	a byte is available. If not, we wait otherwise retrieve the byte
-                        ;	and shift all the buffer contents down one. We put interrupts
-                        ;	on hold while we're playing with these values.
+                        ;	and shift the buffer contents down one. We put interrupts on hold
+                        ;	while we're playing with these values.
                         ;
-   05c7   e5            CINNE:	PUSH	H
-   05c8   c5            	PUSH	B
+   05d9   e5            CINNE:	PUSH	H
+   05da   c5            	PUSH	B
                         	
-   05c9   21 36 20      	LXI	H,INBADDR	; (HL) = address of buffer location
-   05cc   cd 25 03      	CALL	$HLIHL		; (HL) = buffer
-   05cf   7e            CINN1:	MOV	A,M		; get byte count
-   05d0   b7            	ORA	A		; test for zero
-   05d1   ca cf 05      	JZ	CINN1		; loop if nothing there
+   05db   21 36 20      	LXI	H,INBADDR	; (HL) = address of buffer location
+   05de   cd 25 03      	CALL	$HLIHL		; (HL) = buffer
+   05e1   7e            CINN1:	MOV	A,M		; get byte count
+   05e2   b7            	ORA	A		; test for zero
+   05e3   ca e1 05      	JZ	CINN1		; loop if nothing there
                         ;
                         ;	we have a byte in the buffer! - load it and return
                         ;
-   05d4   f3            	DI			; don't step on the IRQ handler
+   05e6   f3            	DI			; don't step on the IRQ handler
                         	
-   05d5   35            	DCR	M		; decrement the byte count
-   05d6   4e            	MOV	C,M		; (C) = count - 1
-   05d7   23            	INX	H		; point to byte to be read
-   05d8   46            	MOV	B,M		; (B) = character we want
+   05e7   35            	DCR	M		; decrement the byte count
+   05e8   4e            	MOV	C,M		; (C) = count - 1
+   05e9   23            	INX	H		; point to byte to be read
+   05ea   46            	MOV	B,M		; (B) = character we want
                         	
-   05d9   0d            CINN2:	DCR	C		; move others down
-   05da   fa e5 05      	JM	CINN3		; no more
-   05dd   23            	INX	H		; next one
-   05de   7e            	MOV	A,M		; fetch it
-   05df   2b            	DCX	H		; back one
-   05e0   77            	MOV	M,A		; store it
-   05e1   23            	INX	H		; fix pointer
-   05e2   c3 d9 05      	JMP	CINN2		; and loop
+   05eb   0d            CINN2:	DCR	C		; move others down
+   05ec   fa f7 05      	JM	CINN3		; no more
+   05ef   23            	INX	H		; next one
+   05f0   7e            	MOV	A,M		; fetch it
+   05f1   2b            	DCX	H		; back one
+   05f2   77            	MOV	M,A		; store it
+   05f3   23            	INX	H		; fix pointer
+   05f4   c3 eb 05      	JMP	CINN2		; and loop
                         	
-   05e5   fb            CINN3:	EI			; restore interrupts
-   05e6   78            	MOV	A,B		; get back our byte
+   05f7   fb            CINN3:	EI			; restore interrupts
+   05f8   78            	MOV	A,B		; get back our byte
                         	
-   05e7   c1            	POP	B
-   05e8   e1            	POP	H
-                        	
-   05e9   fe 03         	CPI	CANCEL		; Check for CANCEL character
-   05eb   ca 0a 04      	JZ	WSTART		; Yes, warm start monitor
-   05ee   c9            	RET
-                        	
-                        ;	PUSH	H
-                        ;	LXI	H,NBYTES	; point to counter
+   05f9   c1            	POP	B
+   05fa   e1            	POP	H
+                        
+                        ;	warm restart feature disabled - gfr
                         ;	
-                        ;
-                        ;	Here we just wait for a start bit. This should happen
-                        ;	before disabling interrupts - gfr
-                        ;
-                        ;CI1:	RIM			; read RIN signal
-                        ;	ANI	080h		; check for start bit
-                        ;	JZ	CI1		; wait 'til we get one...
-                        ;
-                        ;	Incoming data... here we go!
-                        ;
-                        ;	DI			;Must disable interrupts
-                        ;	MVI	B,9		;Receive bits counter
-                        ;
-                        ;
-                        ;	LXI	H,HALFBIT	;Delay one half-bit time, this puts
-                        ;CI2:	DCR	L		;us in the middle of the start bit
-                        ;	JNZ	CI2
-                        ;	DCR	H
-                        ;	JNZ	CI2
-                        ;;
-                        ;;	Now start reading the byte - gfr
-                        ;;
-                        ;CI3:	LXI	H,BITTIME	;Delay one bit-time, since we are shifted
-                        ;CI4:	DCR	L		;a half-bit time through the start bit, this
-                        ;	JNZ	CI4		;will keep us in the middle of bits for
-                        ;	DCR	H		;reliable sampling.
-                        ;	JNZ	CI4
-                        ;
-                        ;	RIM			;Read the SID line
-                        ;	CMA			; invert for H8 Mini - gfr
-                        ;	RAL			; CY = data bit (invert for H8 Mini)
-                        ;	DCR	B		; Determine if this is a stop bit
-                        ;	JZ	CI5		; Stop bit, done with char receive (invert H8 Mini)
-                        ;
-                        ;	MOV	A,C		;Not done, rotate a bit in CY into C
-                        ;	RAR
-                        ;	MOV	C,A
-                        ;	NOP			;Equalize COUT and CINNE loop times
-                        ;	JMP	CI3		;Get more bits
-                        ;
-                        ;CI5:	POP	H		;Restore HL
-                        ;	MOV	A,C		;A = received character
-                        ;	POP	B		;Restore BC
-                        ;	EI
-                        ;	CPI	CANCEL		;Check for CANCEL character
-                        ;	JZ	WSTART		;Yes, warm start monitor
-                        ;	RET
+                        ;	CPI	CANCEL		; Check for CANCEL character
+                        ;	JZ	WSTART		; Yes, warm start monitor
+   05fb   c9            	RET
+                        	
                         
                         ;
                         ;COUT -- Output a character to the console
@@ -1988,36 +1961,36 @@
                         ; exit: character is printed to the console
                         ;		interrupts are enabled
                         ;
-   05ef   f5            COUT:	PUSH	PSW		;Preserve char in A
-   05f0   c5            	PUSH	B		;Preserve registers
-   05f1   e5            	PUSH	H
-   05f2   f3            	DI			;Must disable interrupts
-   05f3   4f            	MOV	C,A		;C = character to output
-   05f4   af            	XRA	A		;Clear CY
-   05f5   06 0a         	MVI	B,10		;Bit count for entire serial transaction (10 - gfr)
+   05fc   f5            COUT:	PUSH	PSW		;Preserve char in A
+   05fd   c5            	PUSH	B		;Preserve registers
+   05fe   e5            	PUSH	H
+   05ff   f3            	DI			;Must disable interrupts
+   0600   4f            	MOV	C,A		;C = character to output
+   0601   af            	XRA	A		;Clear CY
+   0602   06 0a         	MVI	B,10		;Bit count for entire serial transaction (10 - gfr)
                         
-   05f7   3e 80         CO1:	MVI	A,80H		;Set what will become SOD enable bit
-   05f9   1f            	RAR			;Move CY into SOD data bit
-   05fa   30            	SIM			;Output it on SOD
-   05fb   21 37 01      	LXI	H,BITTIME	;Delay one bit time
-   05fe   2d            CO2:	DCR	L
-   05ff   c2 fe 05      	JNZ	CO2
-   0602   25            	DCR	H
-   0603   c2 fe 05      	JNZ	CO2
+   0604   3e 80         CO1:	MVI	A,80H		;Set what will become SOD enable bit
+   0606   1f            	RAR			;Move CY into SOD data bit
+   0607   30            	SIM			;Output it on SOD
+   0608   21 37 01      	LXI	H,BITTIME	;Delay one bit time
+   060b   2d            CO2:	DCR	L
+   060c   c2 0b 06      	JNZ	CO2
+   060f   25            	DCR	H
+   0610   c2 0b 06      	JNZ	CO2
                         
-   0606   37            	STC			;Set CY, will become stop bit	
-   0607   79            	MOV	A,C		
-   0608   1f            	RAR			;Get a bit from the byte to output into CY
-   0609   4f            	MOV	C,A
-   060a   05            	DCR	B		;Decrement bit count
-   060b   c2 f7 05      	JNZ	CO1		;Not done, send more bits
+   0613   37            	STC			;Set CY, will become stop bit	
+   0614   79            	MOV	A,C		
+   0615   1f            	RAR			;Get a bit from the byte to output into CY
+   0616   4f            	MOV	C,A
+   0617   05            	DCR	B		;Decrement bit count
+   0618   c2 04 06      	JNZ	CO1		;Not done, send more bits
                         		
-   060e   e1            	POP	H		;Restore registers
-   060f   c1            	POP	B
-   0610   fb            	EI
+   061b   e1            	POP	H		;Restore registers
+   061c   c1            	POP	B
+   061d   fb            	EI
                         
-   0611   f1            	POP	PSW		;A = char printed
-   0612   c9            	RET
+   061e   f1            	POP	PSW		;A = char printed
+   061f   c9            	RET
                         
                         ;	END GWMON Code
                         
@@ -2031,22 +2004,22 @@
                         ;
                         ;	USES:	A,F
                         ;
-   0613   c5            BLANK:	PUSH	B		; BC used for working storage
+   0620   c5            BLANK:	PUSH	B		; BC used for working storage
                         
-   0614   db f0         	IN	PPI+IO.A	; read port A settings
-   0616   e6 f0         	ANI	11110000B	; clear LED selects (PA0..PA3)
-   0618   47            	MOV	B,A		; save it
-   0619   0e 09         	MVI	C,9		; 9 LEDs, work right to left
-   061b   81            BLOOP:	ADD	C		; address an LED
-   061c   d3 f0         	OUT	PPI+IO.A	; select it
-   061e   af            	XRA	A		; zero = all segments off
-   061f   d3 f1         	OUT	PPI+IO.B	; turn off all segments
-   0621   78            	MOV	A,B		; get back mask
-   0622   0d            	DCR	C		; count down
-   0623   c2 1b 06      	JNZ	BLOOP		; and loop through all 9
+   0621   db f0         	IN	PPI+IO.A	; read port A settings
+   0623   e6 f0         	ANI	11110000B	; clear LED selects (PA0..PA3)
+   0625   47            	MOV	B,A		; save it
+   0626   0e 09         	MVI	C,9		; 9 LEDs, work right to left
+   0628   81            BLOOP:	ADD	C		; address an LED
+   0629   d3 f0         	OUT	PPI+IO.A	; select it
+   062b   af            	XRA	A		; zero = all segments off
+   062c   d3 f1         	OUT	PPI+IO.B	; turn off all segments
+   062e   78            	MOV	A,B		; get back mask
+   062f   0d            	DCR	C		; count down
+   0630   c2 28 06      	JNZ	BLOOP		; and loop through all 9
                         
-   0626   c1            	POP	B
-   0627   c9            	RET
+   0633   c1            	POP	B
+   0634   c9            	RET
                         
                         
                         ;	DLYNOI - Delay with No Interrupts. Delays the specified number of
@@ -2061,22 +2034,22 @@
                         ;	USES:	A,F
                         ;
                         ; =====================================================================
-   0628   c5            DLYNOI:	PUSH	B		; BC used for working storage
-   0629   47            	MOV	B,A		; B = outer loop counter
+   0635   c5            DLYNOI:	PUSH	B		; BC used for working storage
+   0636   47            	MOV	B,A		; B = outer loop counter
                         ;
                         ;	Each inner loop takes 18 T-states or 9 uS of time. 222 repetitions
                         ;	gives 1,998 uS of time.
                         ;
-   062a   0e de         OUTER:	MVI	C,222		; 222 * 9 ~= 2 ms
-   062c   00            INNER:	NOP			; kill time (4 T-states)
-   062d   0d            	DCR	C		; decrement inner counter (4 T-states)
-   062e   c2 2c 06      	JNZ	INNER		; count down (10 T-states each jump)
+   0637   0e de         OUTER:	MVI	C,222		; 222 * 9 ~= 2 ms
+   0639   00            INNER:	NOP			; kill time (4 T-states)
+   063a   0d            	DCR	C		; decrement inner counter (4 T-states)
+   063b   c2 39 06      	JNZ	INNER		; count down (10 T-states each jump)
                         	
-   0631   05            	DCR	B		; decrement outer counter
-   0632   c2 2a 06      	JNZ	OUTER		; loop 'til done
+   063e   05            	DCR	B		; decrement outer counter
+   063f   c2 37 06      	JNZ	OUTER		; loop 'til done
                         	
-   0635   c1            	POP	B		; restore BC
-   0636   c9            	RET
+   0642   c1            	POP	B		; restore BC
+   0643   c9            	RET
                         
                         ;	RCK - Read Console Keypad
                         ;
@@ -2108,39 +2081,39 @@
                         ;
                         ;	USES	A,F
                         ;
-   0637   e5            RCK:	PUSH	H
-   0638   c5            	PUSH	B
+   0644   e5            RCK:	PUSH	H
+   0645   c5            	PUSH	B
                         	
-   0639   0e 28         	MVI	C,ARDLY/DBDLY	; loop for auto-repeat
-   063b   21 16 20      	LXI	H,RCKA		; point to keypad byte
+   0646   0e 28         	MVI	C,ARDLY/DBDLY	; loop for auto-repeat
+   0648   21 16 20      	LXI	H,RCKA		; point to keypad byte
                         ;
                         ;	First wait for some keyboard action
                         ;
-   063e   3a 34 20      RCK1:	LDA	PCKVAL		; get most recent key hit
-   0641   47            	MOV	B,A		; save it
-   0642   3e 05         	MVI	A,DBDLY/2	; delay to debounce
-   0644   cd 53 00      	CALL	DLY
-   0647   78            	MOV	A,B		; get back candidate
+   064b   3a 34 20      RCK1:	LDA	PCKVAL		; get most recent key hit
+   064e   47            	MOV	B,A		; save it
+   064f   3e 05         	MVI	A,DBDLY/2	; delay to debounce
+   0651   cd 53 00      	CALL	DLY
+   0654   78            	MOV	A,B		; get back candidate
                         	
-   0648   be            	CMP	M		; compare to RCKA
-   0649   c2 50 06      	JNZ	RCK2		; have a change
-   064c   0d            	DCR	C		; wait N cycles (auto repeat)
-   064d   c2 3e 06      	JNZ	RCK1		; changed, start over
+   0655   be            	CMP	M		; compare to RCKA
+   0656   c2 5d 06      	JNZ	RCK2		; have a change
+   0659   0d            	DCR	C		; wait N cycles (auto repeat)
+   065a   c2 4b 06      	JNZ	RCK1		; changed, start over
                         
-   0650   77            RCK2:	MOV	M,A
-   0651   b7            	ORA	A		; set flag bits
-   0652   fa 3e 06      	JM	RCK1		; bit 7 set... no key pressed
+   065d   77            RCK2:	MOV	M,A
+   065e   b7            	ORA	A		; set flag bits
+   065f   fa 4b 06      	JM	RCK1		; bit 7 set... no key pressed
                         ;
                         ;	have a key
                         ;	
                         ;
                         ;	Make noise here...
                         ;
-   0655   e6 0f         	ANI	17Q		; make sure it's 4 bits
+   0662   e6 0f         	ANI	17Q		; make sure it's 4 bits
                         	
-   0657   c1            	POP	B
-   0658   e1            	POP	H
-   0659   c9            	RET
+   0664   c1            	POP	B
+   0665   e1            	POP	H
+   0666   c9            	RET
                         
                         ;	DISPLAY SEGMENT CODING:
                         ;
@@ -2160,28 +2133,28 @@
                         ;
                         ;	NOTE: H8 Mini is inverse of H8
                         
-   065a   5b 67         DSPA:	DW	675BH		; SP
-   065c   6f 63         	DW	636FH		; AF
-   065e   79 72         	DW	7279H		; BC
-   0660   3d 73         	DW	733DH		; DE
-   0662   6d 70         	DW	706DH		; HL
-   0664   67 31         	DW	3167H		; PC
+   0667   5b 67         DSPA:	DW	675BH		; SP
+   0669   6f 63         	DW	636FH		; AF
+   066b   79 72         	DW	7279H		; BC
+   066d   3d 73         	DW	733DH		; DE
+   066f   6d 70         	DW	706DH		; HL
+   0671   67 31         	DW	3167H		; PC
                         
                         ;	Octal to 7-segment pattern
                         ;
                         ;	NOTE: H8 Mini is inverse of H8
                         
                         
-   0666   7e            DODA:	DB	7EH		; 0
-   0667   0c            	DB	0CH		; 1
-   0668   37            	DB	37H		; 2
-   0669   1f            	DB	1FH		; 3
-   066a   4d            	DB	4DH		; 4
-   066b   5b            	DB	5BH		; 5
-   066c   7b            	DB	7BH		; 6
-   066d   0e            	DB	0EH		; 7
-   066e   7f            	DB	7FH		; 8
-   066f   5f            	DB	5FH		; 9
+   0673   7e            DODA:	DB	7EH		; 0
+   0674   0c            	DB	0CH		; 1
+   0675   37            	DB	37H		; 2
+   0676   1f            	DB	1FH		; 3
+   0677   4d            	DB	4DH		; 4
+   0678   5b            	DB	5BH		; 5
+   0679   7b            	DB	7BH		; 6
+   067a   0e            	DB	0EH		; 7
+   067b   7f            	DB	7FH		; 8
+   067c   5f            	DB	5FH		; 9
                         
                         ; =-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=
                         ;
@@ -2206,42 +2179,42 @@
                         ;		(A) UNCHANGED
                         ;	USES	F
                         
-   0670   c5            CRC	PUSH	B		; SAVE (BC)
-   0671   06 08         	MVI	B,8		; (B) = BIT COUNT
-   0673   e5            	PUSH	H
-   0674   2a 17 20      	LHLD	CRCSUM
-   0677   07            CRC1	RLC
-   0678   4f            	MOV	C,A		; (C) = BIT
-   0679   7d            	MOV	A,L
-   067a   87            	ADD	A
-   067b   6f            	MOV	L,A
-   067c   7c            	MOV	A,H
-   067d   17            	RAL
-   067e   67            	MOV	H,A
-   067f   17            	RAL
-   0680   a9            	XRA	C
-   0681   0f            	RRC
-   0682   d2 8d 06      	JNC	CRC2		; IF NOT TO XOR
-   0685   7c            	MOV	A,H
-   0686   ee 80         	XRI	200Q
-   0688   67            	MOV	H,A
-   0689   7d            	MOV A,L
-   068a   ee 05         	XRI	5Q
-   068c   6f            	MOV	L,A
-   068d   79            CRC2	MOV	A,C
-   068e   05            	DCR	B
-   068f   c2 77 06      	JNZ	CRC1		; IF MORE TO GO
-   0692   22 17 20      	SHLD	CRCSUM
-   0695   e1            	POP	H		; RESTORE (HL)
-   0696   c1            	POP	B		; RESTORE (BC)
-   0697   c9            	RET			; EXIT
+   067d   c5            CRC	PUSH	B		; SAVE (BC)
+   067e   06 08         	MVI	B,8		; (B) = BIT COUNT
+   0680   e5            	PUSH	H
+   0681   2a 17 20      	LHLD	CRCSUM
+   0684   07            CRC1	RLC
+   0685   4f            	MOV	C,A		; (C) = BIT
+   0686   7d            	MOV	A,L
+   0687   87            	ADD	A
+   0688   6f            	MOV	L,A
+   0689   7c            	MOV	A,H
+   068a   17            	RAL
+   068b   67            	MOV	H,A
+   068c   17            	RAL
+   068d   a9            	XRA	C
+   068e   0f            	RRC
+   068f   d2 9a 06      	JNC	CRC2		; IF NOT TO XOR
+   0692   7c            	MOV	A,H
+   0693   ee 80         	XRI	200Q
+   0695   67            	MOV	H,A
+   0696   7d            	MOV A,L
+   0697   ee 05         	XRI	5Q
+   0699   6f            	MOV	L,A
+   069a   79            CRC2	MOV	A,C
+   069b   05            	DCR	B
+   069c   c2 84 06      	JNZ	CRC1		; IF MORE TO GO
+   069f   22 17 20      	SHLD	CRCSUM
+   06a2   e1            	POP	H		; RESTORE (HL)
+   06a3   c1            	POP	B		; RESTORE (BC)
+   06a4   c9            	RET			; EXIT
                         
                         ;	RMEM - LOAD MEMORY FROM TAPE
                         ;
                         
-   0698   21 72 07      RMEM	LXI	H,TPABT
-   069b   22 19 20      	SHLD	TPERRX		; SETUP ERROR EXIT ADDRESS
-   069e   c3 a1 06      	JMP	LOAD
+   06a5   21 7f 07      RMEM	LXI	H,TPABT
+   06a8   22 19 20      	SHLD	TPERRX		; SETUP ERROR EXIT ADDRESS
+   06ab   c3 ae 06      	JMP	LOAD
                         
                         ;	LOAD - LOAD MEMORY FROM TAPE
                         ;
@@ -2254,51 +2227,51 @@
                         ;		TO CALLER IF ALL OK
                         ;		TO ERROR EXIT IF TAPE ERRORS DETECTED.
                         
-   06a1   01 00 fe      LOAD	LXI	B,177000Q	 ; 400Q-RT.MI*256-256 (BC) = - REQUIRED TYPE AND #
-   06a4   cd 83 07      LOA0	CALL	SRS		; SCAN FOR RECORD START
-   06a7   6f            	MOV	L,A		; (HL) = COUNT
-   06a8   eb            	XCHG			; (DE) = COUNT, (HL) = TYPE AND #
-   06a9   0d            	DCR	C		; (C) = - NEXT #
-   06aa   09            	DAD	B
-   06ab   7c            	MOV	A,H
-   06ac   c5            	PUSH	B		; SAVE TYPE AND #
-   06ad   f5            	PUSH	PSW		; SAVE TYPE CODE
-   06ae   e6 7f         	ANI	177Q		; CLEAR END FLAG BIT
-   06b0   b5            	ORA	L
-   06b1   3e 02         	MVI	A,2		; SEQUENCE ERROR
-   06b3   c2 53 07      	JNZ	TPERR		; IF NOT RIGHT TYPE OF SEQUENCE
-   06b6   cd a3 07      	CALL	RNP		; READ ADDR
-   06b9   44            	MOV	B,H
-   06ba   4f            	MOV	C,A		; (BC) = P-REG ADDRESS
-   06bb   3e 0a         	MVI	A,10
-   06bd   d5            	PUSH	D		; SAVE (DE)
-   06be   cd 9f 02      	CALL	LRA.		; LOCATE REG ADDRESS
-   06c1   d1            	POP	D		; RESTORE (DE)
-   06c2   71            	MOV	M,C		; SET P-REG IN MEM
-   06c3   23            	INX	H
-   06c4   70            	MOV	M,B
-   06c5   cd a3 07      	CALL	RNP		; READ ADDRESS
-   06c8   6f            	MOV	L,A		; (HL) = ADDRESS, (DE) = COUNT
-   06c9   22 00 20      	SHLD	START
+   06ae   01 00 fe      LOAD	LXI	B,177000Q	 ; 400Q-RT.MI*256-256 (BC) = - REQUIRED TYPE AND #
+   06b1   cd 90 07      LOA0	CALL	SRS		; SCAN FOR RECORD START
+   06b4   6f            	MOV	L,A		; (HL) = COUNT
+   06b5   eb            	XCHG			; (DE) = COUNT, (HL) = TYPE AND #
+   06b6   0d            	DCR	C		; (C) = - NEXT #
+   06b7   09            	DAD	B
+   06b8   7c            	MOV	A,H
+   06b9   c5            	PUSH	B		; SAVE TYPE AND #
+   06ba   f5            	PUSH	PSW		; SAVE TYPE CODE
+   06bb   e6 7f         	ANI	177Q		; CLEAR END FLAG BIT
+   06bd   b5            	ORA	L
+   06be   3e 02         	MVI	A,2		; SEQUENCE ERROR
+   06c0   c2 60 07      	JNZ	TPERR		; IF NOT RIGHT TYPE OF SEQUENCE
+   06c3   cd b0 07      	CALL	RNP		; READ ADDR
+   06c6   44            	MOV	B,H
+   06c7   4f            	MOV	C,A		; (BC) = P-REG ADDRESS
+   06c8   3e 0a         	MVI	A,10
+   06ca   d5            	PUSH	D		; SAVE (DE)
+   06cb   cd 9f 02      	CALL	LRA.		; LOCATE REG ADDRESS
+   06ce   d1            	POP	D		; RESTORE (DE)
+   06cf   71            	MOV	M,C		; SET P-REG IN MEM
+   06d0   23            	INX	H
+   06d1   70            	MOV	M,B
+   06d2   cd b0 07      	CALL	RNP		; READ ADDRESS
+   06d5   6f            	MOV	L,A		; (HL) = ADDRESS, (DE) = COUNT
+   06d6   22 00 20      	SHLD	START
                         
-   06cc   cd a7 07      LOA1	CALL	RNB		; READ BYTE
-   06cf   77            	MOV	M,A
-   06d0   22 14 20      	SHLD	ABUSS		; SET ABUSS FOR DISPLAY
-   06d3   23            	INX	H
-   06d4   1b            	DCX	D
-   06d5   7a            	MOV	A,D
-   06d6   b3            	ORA	E
-   06d7   c2 cc 06      	JNZ	LOA1		; IF MORE TO GO
+   06d9   cd b4 07      LOA1	CALL	RNB		; READ BYTE
+   06dc   77            	MOV	M,A
+   06dd   22 14 20      	SHLD	ABUSS		; SET ABUSS FOR DISPLAY
+   06e0   23            	INX	H
+   06e1   1b            	DCX	D
+   06e2   7a            	MOV	A,D
+   06e3   b3            	ORA	E
+   06e4   c2 d9 06      	JNZ	LOA1		; IF MORE TO GO
                         
-   06da   cd 48 07      	CALL	CTC		; CHECK TAPE CHECKSUM
+   06e7   cd 55 07      	CALL	CTC		; CHECK TAPE CHECKSUM
                         
                         ;	READ NEXT BLOCK
                         
-   06dd   f1            	POP	PSW		; (A) = FILE TYPE BYTE
-   06de   c1            	POP	B		; (BC) = -(LAST TYPE, LAST #0
-   06df   07            	RLC
-   06e0   da 45 07      	JC	TFT		; ALL DONE - TURN OFF TAPE
-   06e3   c3 a4 06      	JMP	LOA0		; READ ANOTHER RECORD
+   06ea   f1            	POP	PSW		; (A) = FILE TYPE BYTE
+   06eb   c1            	POP	B		; (BC) = -(LAST TYPE, LAST #0
+   06ec   07            	RLC
+   06ed   da 52 07      	JC	TFT		; ALL DONE - TURN OFF TAPE
+   06f0   c3 b1 06      	JMP	LOA0		; READ ANOTHER RECORD
                         ;	DUMP - DUMP MEMORY TO MAG TAPE.
                         ;
                         ;	DUMP SPECIFIED MEMORY RANGE TO MAG TAPE.
@@ -2308,60 +2281,60 @@
                         ;		USER PC = ENTRY POINT ADDRESS
                         ;	EXIT	TO CALLER.
                         
-   06e6   21 72 07      WMEM	LXI	H,TPABT
-   06e9   22 19 20      	SHLD	TPERRX		; TAPE ERROR EXIT
+   06f3   21 7f 07      WMEM	LXI	H,TPABT
+   06f6   22 19 20      	SHLD	TPERRX		; TAPE ERROR EXIT
                         
-   06ec   3e 01         DUMP	MVI	A,UCI.TE
-   06ee   d3 f9         	OUT	OP.TPC		; SETUP TAPE CONTROL
-   06f0   3e 16         	MVI	A,A.SYN
-   06f2   26 20         	MVI	H,32		; (H) = # OF SYNC CHARACTERS
-   06f4   cd ba 07      WME1	CALL	WNB
-   06f7   25            	DCR	H
-   06f8   c2 f4 06      	JNZ	WME1		; WRITE SYN HEADER
-   06fb   3e 02         	MVI	A,A.STX
-   06fd   cd ba 07      	CALL	WNB		; WRITE STX
-   0700   6c            	MOV	L,H		; (HL) = 00
-   0701   22 17 20      	SHLD	CRCSUM		; CLEAR CRC 16
-   0704   21 01 81      	LXI	H,100401Q	; RT.MI+80H*256+1 FIRST AND LAST MI RECORD
-   0707   cd b5 07      	CALL	WNP
-   070a   2a 00 20      	LHLD	START
-   070d   eb            	XCHG			; (D,E) = START ADDRESS
-   070e   2a 14 20      	LHLD	ABUSS		; (H,L) = STOP ADDR
-   0711   23            	INX	H		; COMPUTE WITH STOP+1
-   0712   7d            	MOV	A,L
-   0713   93            	SUB	E
-   0714   6f            	MOV	L,A
-   0715   7c            	MOV	A,H
-   0716   9a            	SBB	D
-   0717   67            	MOV	H,A		; (HL) = COUNT
-   0718   cd b5 07      	CALL	WNP		; WRITE COUNT
-   071b   e5            	PUSH	H
-   071c   3e 0a         	MVI	A,10
-   071e   d5            	PUSH	D		; SAVE (DE)
-   071f   cd 9f 02      	CALL	LRA.		; LOCATE P-REG ADDRESS
-   0722   7e            	MOV	A,M
-   0723   23            	INX	H
-   0724   66            	MOV	H,M
-   0725   6f            	MOV	L,A		; (HL) = CONTENTS OF PC
-   0726   cd b5 07      	CALL	WNP		; WRITE HEADER
-   0729   e1            	POP	H		; (HL) = ADDRESS
-   072a   d1            	POP	D		; (DE) = COUNT
-   072b   cd b5 07      	CALL	WNP
+   06f9   3e 01         DUMP	MVI	A,UCI.TE
+   06fb   d3 f9         	OUT	OP.TPC		; SETUP TAPE CONTROL
+   06fd   3e 16         	MVI	A,A.SYN
+   06ff   26 20         	MVI	H,32		; (H) = # OF SYNC CHARACTERS
+   0701   cd c7 07      WME1	CALL	WNB
+   0704   25            	DCR	H
+   0705   c2 01 07      	JNZ	WME1		; WRITE SYN HEADER
+   0708   3e 02         	MVI	A,A.STX
+   070a   cd c7 07      	CALL	WNB		; WRITE STX
+   070d   6c            	MOV	L,H		; (HL) = 00
+   070e   22 17 20      	SHLD	CRCSUM		; CLEAR CRC 16
+   0711   21 01 81      	LXI	H,100401Q	; RT.MI+80H*256+1 FIRST AND LAST MI RECORD
+   0714   cd c2 07      	CALL	WNP
+   0717   2a 00 20      	LHLD	START
+   071a   eb            	XCHG			; (D,E) = START ADDRESS
+   071b   2a 14 20      	LHLD	ABUSS		; (H,L) = STOP ADDR
+   071e   23            	INX	H		; COMPUTE WITH STOP+1
+   071f   7d            	MOV	A,L
+   0720   93            	SUB	E
+   0721   6f            	MOV	L,A
+   0722   7c            	MOV	A,H
+   0723   9a            	SBB	D
+   0724   67            	MOV	H,A		; (HL) = COUNT
+   0725   cd c2 07      	CALL	WNP		; WRITE COUNT
+   0728   e5            	PUSH	H
+   0729   3e 0a         	MVI	A,10
+   072b   d5            	PUSH	D		; SAVE (DE)
+   072c   cd 9f 02      	CALL	LRA.		; LOCATE P-REG ADDRESS
+   072f   7e            	MOV	A,M
+   0730   23            	INX	H
+   0731   66            	MOV	H,M
+   0732   6f            	MOV	L,A		; (HL) = CONTENTS OF PC
+   0733   cd c2 07      	CALL	WNP		; WRITE HEADER
+   0736   e1            	POP	H		; (HL) = ADDRESS
+   0737   d1            	POP	D		; (DE) = COUNT
+   0738   cd c2 07      	CALL	WNP
                         
-   072e   7e            WME2	MOV	A,M
-   072f   cd ba 07      	CALL	WNB		; WRITE BYTE
-   0732   22 14 20      	SHLD	ABUSS		; SET ADDRESS FOR DISPLAY
-   0735   23            	INX	H
-   0736   1b            	DCX	D
-   0737   7a            	MOV	A,D
-   0738   b3            	ORA	E
-   0739   c2 2e 07      	JNZ	WME2		; IF MORE TO GO
+   073b   7e            WME2	MOV	A,M
+   073c   cd c7 07      	CALL	WNB		; WRITE BYTE
+   073f   22 14 20      	SHLD	ABUSS		; SET ADDRESS FOR DISPLAY
+   0742   23            	INX	H
+   0743   1b            	DCX	D
+   0744   7a            	MOV	A,D
+   0745   b3            	ORA	E
+   0746   c2 3b 07      	JNZ	WME2		; IF MORE TO GO
                         
                         ;	WRITE CHECKSUM
                         
-   073c   2a 17 20      	LHLD	CRCSUM
-   073f   cd b5 07      	CALL	WNP		; WRITE IT
-   0742   cd b5 07      	CALL	WNP		; FLUSH CHECKSUM
+   0749   2a 17 20      	LHLD	CRCSUM
+   074c   cd c2 07      	CALL	WNP		; WRITE IT
+   074f   cd c2 07      	CALL	WNP		; FLUSH CHECKSUM
                         ;	JMP	TFT
                         
                         ;	TFT - TURN OFF TAPE.
@@ -2369,8 +2342,8 @@
                         ;	STOP THE TAPE TRANSPORT.
                         ;
                         
-   0745   af            TFT	XRA	A
-   0746   d3 f9         	OUT	OP.TPC		; TURN OFF TAPE
+   0752   af            TFT	XRA	A
+   0753   d3 f9         	OUT	OP.TPC		; TURN OFF TAPE
                         
                         ;	CTC - VERIFY CHECKSUM.
                         ;
@@ -2379,12 +2352,12 @@
                         ;		TO *TPERR* IF BAD
                         ;	USES	A,F,H,L
                         
-   0748   cd a3 07      CTC	CALL	RNP		; READ NEXT PAIR
-   074b   2a 17 20      	LHLD	CRCSUM
-   074e   7c            	MOV	A,H
-   074f   b5            	ORA	L
-   0750   c8            	RZ			; RETURN IF OK
-   0751   3e 01         	MVI	A,1		; CHECKSUM ERROR
+   0755   cd b0 07      CTC	CALL	RNP		; READ NEXT PAIR
+   0758   2a 17 20      	LHLD	CRCSUM
+   075b   7c            	MOV	A,H
+   075c   b5            	ORA	L
+   075d   c8            	RZ			; RETURN IF OK
+   075e   3e 01         	MVI	A,1		; CHECKSUM ERROR
                         ;	JMP	TPERR		; (B) = CODE
                         
                         ;	TPERR - PROCESS TAPE ERROR.
@@ -2396,37 +2369,37 @@
                         ;
                         ;	ENTRY	(A) = NUMBER
                         
-   0753   32 14 20      TPERR	STA	ABUSS
-   0756   47            	MOV	B,A		; (B) = CODE
-   0757   cd 45 07      	CALL	TFT		; TURN OFF TAPE
+   0760   32 14 20      TPERR	STA	ABUSS
+   0763   47            	MOV	B,A		; (B) = CODE
+   0764   cd 52 07      	CALL	TFT		; TURN OFF TAPE
                         
                         ;	IS #, RETURN (IF PARITY ERROR)
                         
-   075a   e6            	DB	MI.ANI		; FALL THROUGH WITH CARRY CLEAR
-   075b   78            TER3	MOV	A,B
+   0767   e6            	DB	MI.ANI		; FALL THROUGH WITH CARRY CLEAR
+   0768   78            TER3	MOV	A,B
                         
-   075c   0f            	RRC
-   075d   d8            	RC			; RETURN IF OK
+   0769   0f            	RRC
+   076a   d8            	RC			; RETURN IF OK
                         
                         ;	BEEP AND FLASH ERROR NUMBER
                         
-   075e   dc 74 02      TER1	CC	ALARM		; ALARM IF PROPER TIME
-   0761   cd 78 07      	CALL	TPXIT		; SEE IF #
-   0764   db f0         	IN	IP.PAD
-   0766   fe 2f         	CPI	00101111B	; CHECK FOR #
-   0768   ca 5b 07      	JZ	TER3		; IF #
-   076b   3a 1c 20      	LDA	TICCNT+1
-   076e   1f            	RAR			; 'C' SET IF 1/2 SECOND
-   076f   c3 5e 07      	JMP	TER1
+   076b   dc 74 02      TER1	CC	ALARM		; ALARM IF PROPER TIME
+   076e   cd 85 07      	CALL	TPXIT		; SEE IF #
+   0771   db f0         	IN	IP.PAD
+   0773   fe 2f         	CPI	00101111B	; CHECK FOR #
+   0775   ca 68 07      	JZ	TER3		; IF #
+   0778   3a 1c 20      	LDA	TICCNT+1
+   077b   1f            	RAR			; 'C' SET IF 1/2 SECOND
+   077c   c3 6b 07      	JMP	TER1
                         
                         ;	TPABT - ABORT TAPE LOAD OR DUMP.
                         ;
                         ;	ENTERED WHEN LOADING OR DUMPING, AND THE '*' KEY
                         ;	IS STRUCK.
                         
-   0772   af            TPABT	XRA	A
-   0773   d3 f9         	OUT	OP.TPC		; OFF TAPE
-   0775   c3 92 01      	JMP	ERROR
+   077f   af            TPABT	XRA	A
+   0780   d3 f9         	OUT	OP.TPC		; OFF TAPE
+   0782   c3 92 01      	JMP	ERROR
                         
                         ;	TPXIT - CHECK FOR USER FORCED EDIT.
                         ;
@@ -2439,12 +2412,12 @@
                         ;		TO (TPERRX) IF '*' DOWN
                         ;	USES	A,F
                         
-   0778   db f0         TPXIT	IN	IP.PAD
-   077a   fe 6f         	CPI	01101111B	; *
-   077c   db f9         	IN	IP.TPC		; READ TAPE STATUS
-   077e   c0            	RNZ			; NOT '*', RETURN WITH STATUS
-   077f   2a 19 20      	LHLD	TPERRX
-   0782   e9            	PCHL			; ENTER (TPERRX)
+   0785   db f0         TPXIT	IN	IP.PAD
+   0787   fe 6f         	CPI	01101111B	; *
+   0789   db f9         	IN	IP.TPC		; READ TAPE STATUS
+   078b   c0            	RNZ			; NOT '*', RETURN WITH STATUS
+   078c   2a 19 20      	LHLD	TPERRX
+   078f   e9            	PCHL			; ENTER (TPERRX)
                         
                         ;	SRS - SCAN RECORD START
                         ;
@@ -2462,24 +2435,24 @@
                         ;		(HL) = RECORD COUNT
                         ;	USES	A,F,D,E,H,L
                         
-   0783                 SRS
-   0783   16 00         SRS1	MVI	D,0
-   0785   62            	MOV	H,D
-   0786   6a            	MOV	L,D		; (HL) = 0
-   0787   cd a7 07      SRS2	CALL	RNB		; READ NEXT BYTE
-   078a   14            	INR	D
-   078b   fe 16         	CPI	A.SYN
-   078d   ca 87 07      	JZ	SRS2		; HAVE SYN
-   0790   fe 02         	CPI	A.STX
-   0792   c2 83 07      	JNZ	SRS1		; NOT STX - START OVER
+   0790                 SRS
+   0790   16 00         SRS1	MVI	D,0
+   0792   62            	MOV	H,D
+   0793   6a            	MOV	L,D		; (HL) = 0
+   0794   cd b4 07      SRS2	CALL	RNB		; READ NEXT BYTE
+   0797   14            	INR	D
+   0798   fe 16         	CPI	A.SYN
+   079a   ca 94 07      	JZ	SRS2		; HAVE SYN
+   079d   fe 02         	CPI	A.STX
+   079f   c2 90 07      	JNZ	SRS1		; NOT STX - START OVER
                         
-   0795   3e 0a         	MVI	A,10
-   0797   ba            	CMP	D		; SEE IF ENOUGH SYNC CHARACTERS
-   0798   d2 83 07      	JNC	SRS1		; NOT ENOUGH
-   079b   22 17 20      	SHLD	CRCSUM		; CLEAR CRC-16
-   079e   cd a3 07      	CALL	RNP		; READ LEADER
-   07a1   54            	MOV	D,H
-   07a2   5f            	MOV	E,A
+   07a2   3e 0a         	MVI	A,10
+   07a4   ba            	CMP	D		; SEE IF ENOUGH SYNC CHARACTERS
+   07a5   d2 90 07      	JNC	SRS1		; NOT ENOUGH
+   07a8   22 17 20      	SHLD	CRCSUM		; CLEAR CRC-16
+   07ab   cd b0 07      	CALL	RNP		; READ LEADER
+   07ae   54            	MOV	D,H
+   07af   5f            	MOV	E,A
                         ;	JMP	RNP		; READ COUNT
                         
                         ;	RNP - READ NEXT PAIR.
@@ -2490,8 +2463,8 @@
                         ;	EXIT	(H,A) = BYTE PAIR
                         ;	USES	A,F,H
                         
-   07a3   cd a7 07      RNP	CALL	RNB		; READ NEXT BYTE
-   07a6   67            	MOV	H,A
+   07b0   cd b4 07      RNP	CALL	RNB		; READ NEXT BYTE
+   07b3   67            	MOV	H,A
                         ;	JMP	RNB		; READ NEXT BYTE
                         
                         ;	RNB - READ NEXT BYTE
@@ -2503,12 +2476,12 @@
                         ;	EXIT	(A) = CHARACTER
                         ;	USES	A,F
                         
-   07a7   3e 34         RNB	MVI	A,UCI.RO+UCI.ER+UCI.RE ; TURN ON READER FOR NEXT BYTE
-   07a9   d3 f9         	OUT	OP.TPC
-   07ab   cd 78 07      RNB1	CALL	TPXIT		; CHECK FOR *, READ STATUS
-   07ae   e6 02         	ANI	USR.RXR
-   07b0   ca ab 07      	JZ	RNB1		; IF NOT READY
-   07b3   db f8         	IN	IP.TPD		; INPUT DATA
+   07b4   3e 34         RNB	MVI	A,UCI.RO+UCI.ER+UCI.RE ; TURN ON READER FOR NEXT BYTE
+   07b6   d3 f9         	OUT	OP.TPC
+   07b8   cd 85 07      RNB1	CALL	TPXIT		; CHECK FOR *, READ STATUS
+   07bb   e6 02         	ANI	USR.RXR
+   07bd   ca b8 07      	JZ	RNB1		; IF NOT READY
+   07c0   db f8         	IN	IP.TPD		; INPUT DATA
                         ;	JMP	CRC		; CHECKSUM
                         
                         
@@ -2520,9 +2493,9 @@
                         ;	EXIT	WRITTEN.
                         ;	USES	A,F
                         
-   07b5   7c            WNP	MOV	A,H
-   07b6   cd ba 07      	CALL	WNB
-   07b9   7d            	MOV	A,L
+   07c2   7c            WNP	MOV	A,H
+   07c3   cd c7 07      	CALL	WNB
+   07c6   7d            	MOV	A,L
                         ;	JMP	WNB		; WRITE NEXT BYTE
                         
                         ;	WNB - WRITE NEXT BYTE
@@ -2533,15 +2506,15 @@
                         ;	EXIT	NONE.
                         ;	USES	F
                         
-   07ba   f5            WNB	PUSH	PSW
-   07bb   cd 78 07      WNB1	CALL	TPXIT		; CHECK FOR #, READ STATUS
-   07be   e6 01         	ANI	USR.TXR
-   07c0   ca bb 07      	JZ	WNB1		; IF MORE TO GO
-   07c3   3e 11         	MVI	A,UCI.ER+UCI.TE ; ENABLE TRANSMITTER
-   07c5   d3 f9         	OUT	OP.TPC		; TURN ON TAPE
-   07c7   f1            	POP	PSW
-   07c8   d3 f8         	OUT	OP.TPD		; OUTPUT DATA
-   07ca   c3 70 06      	JMP	CRC		; COMPUTE CRC
+   07c7   f5            WNB	PUSH	PSW
+   07c8   cd 85 07      WNB1	CALL	TPXIT		; CHECK FOR #, READ STATUS
+   07cb   e6 01         	ANI	USR.TXR
+   07cd   ca c8 07      	JZ	WNB1		; IF MORE TO GO
+   07d0   3e 11         	MVI	A,UCI.ER+UCI.TE ; ENABLE TRANSMITTER
+   07d2   d3 f9         	OUT	OP.TPC		; TURN ON TAPE
+   07d4   f1            	POP	PSW
+   07d5   d3 f8         	OUT	OP.TPD		; OUTPUT DATA
+   07d7   c3 7d 06      	JMP	CRC		; COMPUTE CRC
                         
                         
                         
@@ -2636,74 +2609,71 @@
    203a                 	DS	2	; very small buffer
    0001                 $INBUFL	EQU	*-$INBUF-2	; max length of buffer
                         
-   203c                 IOBYTE	DS	1	; byte read by serial I/O handler
-   203d                 NBYTES	DS	1	; number of bytes read (0 or 1)
                         
-   203e                 	END
+   203c                 	END
 0325  $HLIHL        2039  $INBUF        0001  $INBUFL       0002  A.STX     
 0016  A.SYN         0227  ABORT         2014  ABUSS         0274  ALARM     
-200b  ALEDS         0190  ARDLY         0470  ASCHEX        0137  BITTIME   
-0613  BLANK         061b  BLOOP         0008  BS            0003  CANCEL    
+200b  ALEDS         0190  ARDLY         0482  ASCHEX        0137  BITTIME   
+0620  BLANK         0628  BLOOP         0008  BS            0003  CANCEL    
 0040  CB.CLI        0020  CB.MTL        0080  CB.SPK        0010  CB.SSI    
 0066  CI2           006e  CI3           0071  CI4           0087  CI5       
-0099  CI6           0459  CIN           05cf  CINN1         05d9  CINN2     
-05e5  CINN3         05c7  CINNE         005e  CINT          011a  CLK2      
-011f  CLK3          00fd  CLOCK         040d  CMDLP         041f  CMDLP1    
-05b4  CMDTAB        05f7  CO1           05fe  CO2           05ef  COUT      
-000d  CR            0670  CRC           0677  CRC1          068d  CRC2      
-2017  CRCSUM        04cc  CRLF          04f7  CSERR$        059f  CSUMER    
-0748  CTC           0003  CTLC          2009  CTLFLG        0003  CTRL      
+0099  CI6           046b  CIN           05e1  CINN1         05eb  CINN2     
+05f7  CINN3         05d9  CINNE         005e  CINT          011a  CLK2      
+011f  CLK3          00fd  CLOCK         041f  CMDLP         0431  CMDLP1    
+05c6  CMDTAB        0604  CO1           060b  CO2           05fc  COUT      
+000d  CR            067d  CRC           0684  CRC1          069a  CRC2      
+2017  CRCSUM        04de  CRLF          0509  CSERR$        05b1  CSUMER    
+0755  CTC           0003  CTLC          2009  CTLFLG        0003  CTRL      
 000a  DBDLY         2011  DLEDS         0053  DLY           0058  DLY2      
-0628  DLYNOI        0000  DM.MR         0001  DM.MW         0002  DM.RR     
-0003  DM.RW         04b2  DMPLOC        02c7  DOD           02cc  DOD1      
-0666  DODA          065a  DSPA          2007  DSPMOD        2006  DSPROT    
-06ec  DUMP          0513  EDTCM1        0531  EDTCM2        0510  EDTCMD    
-04fd  ERR$          042d  ERRMSG        0192  ERROR         200b  FPLEDS    
-043f  GETADR        044b  GETHE2        0448  GETHEX        0253  GO        
-0535  GOCMD         0400  GWMON         011c  HALFBIT       0502  HDCMD     
-0284  HDLY1         0286  HDLY2         045f  HEXBYT        0481  HEXDM1    
-0486  HEXDM2        0497  HEXDM3        047f  HEXDMP        0276  HORN      
+0635  DLYNOI        0000  DM.MR         0001  DM.MW         0002  DM.RR     
+0003  DM.RW         04c4  DMPLOC        02c7  DOD           02cc  DOD1      
+0673  DODA          0667  DSPA          2007  DSPMOD        2006  DSPROT    
+06f9  DUMP          0525  EDTCM1        0543  EDTCM2        0522  EDTCMD    
+050f  ERR$          043f  ERRMSG        0192  ERROR         200b  FPLEDS    
+0451  GETADR        045d  GETHE2        045a  GETHEX        0253  GO        
+0547  GOCMD         040c  GWMON         011c  HALFBIT       0514  HDCMD     
+0284  HDLY1         0286  HDLY2         0471  HEXBYT        0493  HEXDM1    
+0498  HEXDM2        04a9  HEXDM3        0491  HEXDMP        0276  HORN      
 0240  IN            2036  INBADDR       2038  INBLEN        00a7  INIT      
-0000  INIT0         00b7  INIT2         062c  INNER         0539  INPCMD    
+0000  INIT0         00b7  INIT2         0639  INNER         054b  INPCMD    
 002c  INT5.5        003c  INT7.5        00f0  INTXIT        0000  IO.A      
 0001  IO.B          0002  IO.C          02a7  IOA           02ab  IOB       
-02ad  IOB1          203c  IOBYTE        2002  IOWRK         00f0  IP.PAD    
-00f9  IP.TPC        00f8  IP.TPD        0080  K0            0020  KMATH     
-0010  KNUM          0040  KR            0228  LAST          000a  LF        
-06a4  LOA0          06cc  LOA1          06a1  LOAD          055d  LODCM0    
-0560  LODCM1        057f  LODCM2        058a  LODCM3        0594  LODCM4    
-0554  LODCMD        05a5  LODEXT        029c  LRA           029f  LRA.      
-022c  LST2          0235  MEMM          2008  MFLAG         00e6  MI.ANI    
-0076  MI.HLT        00db  MI.IN         003a  MI.LDA        0011  MI.LXID   
-00d3  MI.OUT        00c9  MI.RET        01a4  MTR           01a5  MTR1      
-01c4  MTR4          01e8  MTR5          01f6  MTR6          01dc  MTRA      
-203d  NBYTES        021a  NEXT          000d  NEXTLOC       05c6  NULCMD    
-00f0  OP.CTL        00f0  OP.DIG        00f1  OP.SEG        00f9  OP.TPC    
-00f8  OP.TPD        0243  OUT           0546  OUTCMD        062a  OUTER     
-0129  PCK           0178  PCK1          0146  PCKM          015e  PCKM1     
-0174  PCKN          017b  PCKQ          016b  PCKR          2035  PCKTMP    
-2034  PCKVAL        0186  PCKX          0170  PCKZ          00f0  PPI       
-809e  PPS           009e  PPSROM        04f5  PROMPT$       0007  PRSL      
-2004  PRSRAM        03f9  PRSROM        04a2  PRTADR        04d6  PRTCLS    
-0430  PRTERR        04b3  PRTHEX        04bc  PRTNIB        04c7  PRTSPC    
-04d9  PRTSTR        0637  RCK           063e  RCK1          0650  RCK2      
-2016  RCKA          200a  REFIND        2005  REGI          0203  REGM      
-201d  REGPTR        0104  RFP           0698  RMEM          07a7  RNB       
-07ab  RNB1          07a3  RNP           0436  RUNCMD        0216  RW        
-01f2  SAE           00d5  SAVALL        00fa  SC.UART       04e6  SIGNON$   
-0783  SRS           0783  SRS1          0787  SRS2          0260  SST1      
-0258  SSTEP         8000  STACK         2000  START         0267  STPRTN    
-075e  TER1          075b  TER3          0745  TFT           201b  TICCNT    
-0772  TPABT         0753  TPERR         2019  TPERRX        0778  TPXIT     
-0010  UCI.ER        0002  UCI.IE        0040  UCI.IR        0004  UCI.RE    
-0020  UCI.RO        0001  UCI.TE        0000  UDR           02e6  UFD       
-030c  UFD1          0001  UI.CLK        201f  UIVEC         0002  UMI.16X   
-0040  UMI.1B        0001  UMI.1X        00c0  UMI.2B        0003  UMI.64X   
-0080  UMI.HB        0000  UMI.L5        0004  UMI.L6        0008  UMI.L7    
-000c  UMI.L8        0010  UMI.PA        0020  UMI.PE        0002  UO.DDU    
-0080  UO.HLT        0040  UO.NFR        0001  USR           0040  USR.BD    
-86a0  USR.FE        0010  USR.OE        0008  USR.PE        0002  USR.RXR   
-0004  USR.TXE       0001  USR.TXR       06f4  WME1          072e  WME2      
-06e6  WMEM          07ba  WNB           07bb  WNB1          07b5  WNP       
-040a  WSTART        
+02ad  IOB1          2002  IOWRK         00f0  IP.PAD        00f9  IP.TPC    
+00f8  IP.TPD        0080  K0            0020  KMATH         0010  KNUM      
+0040  KR            0228  LAST          000a  LF            06b1  LOA0      
+06d9  LOA1          06ae  LOAD          056f  LODCM0        0572  LODCM1    
+0591  LODCM2        059c  LODCM3        05a6  LODCM4        0566  LODCMD    
+05b7  LODEXT        029c  LRA           029f  LRA.          022c  LST2      
+0235  MEMM          2008  MFLAG         00e6  MI.ANI        0076  MI.HLT    
+00db  MI.IN         003a  MI.LDA        0011  MI.LXID       00d3  MI.OUT    
+00c9  MI.RET        01a4  MTR           01a5  MTR1          01c4  MTR4      
+01e8  MTR5          01f6  MTR6          01dc  MTRA          021a  NEXT      
+000d  NEXTLOC       05d8  NULCMD        00f0  OP.CTL        00f0  OP.DIG    
+00f1  OP.SEG        00f9  OP.TPC        00f8  OP.TPD        0243  OUT       
+0558  OUTCMD        0637  OUTER         0009  PAMVER$       0129  PCK       
+0178  PCK1          0146  PCKM          015e  PCKM1         0174  PCKN      
+017b  PCKQ          016b  PCKR          2035  PCKTMP        2034  PCKVAL    
+0186  PCKX          0170  PCKZ          00f0  PPI           809e  PPS       
+009e  PPSROM        0507  PROMPT$       0007  PRSL          2004  PRSRAM    
+03f9  PRSROM        04b4  PRTADR        04e8  PRTCLS        0442  PRTERR    
+04c5  PRTHEX        04ce  PRTNIB        04d9  PRTSPC        04eb  PRTSTR    
+0644  RCK           064b  RCK1          065d  RCK2          2016  RCKA      
+200a  REFIND        2005  REGI          0203  REGM          201d  REGPTR    
+0104  RFP           06a5  RMEM          07b4  RNB           07b8  RNB1      
+07b0  RNP           0448  RUNCMD        0216  RW            01f2  SAE       
+00d5  SAVALL        00fa  SC.UART       04f8  SIGNON$       0790  SRS       
+0790  SRS1          0794  SRS2          0260  SST1          0258  SSTEP     
+8000  STACK         2000  START         0267  STPRTN        076b  TER1      
+0768  TER3          0752  TFT           201b  TICCNT        077f  TPABT     
+0760  TPERR         2019  TPERRX        0785  TPXIT         0010  UCI.ER    
+0002  UCI.IE        0040  UCI.IR        0004  UCI.RE        0020  UCI.RO    
+0001  UCI.TE        0000  UDR           02e6  UFD           030c  UFD1      
+0001  UI.CLK        201f  UIVEC         0002  UMI.16X       0040  UMI.1B    
+0001  UMI.1X        00c0  UMI.2B        0003  UMI.64X       0080  UMI.HB    
+0000  UMI.L5        0004  UMI.L6        0008  UMI.L7        000c  UMI.L8    
+0010  UMI.PA        0020  UMI.PE        0002  UO.DDU        0080  UO.HLT    
+0040  UO.NFR        0001  USR           0040  USR.BD        86a0  USR.FE    
+0010  USR.OE        0008  USR.PE        0002  USR.RXR       0004  USR.TXE   
+0001  USR.TXR       0701  WME1          073b  WME2          06f3  WMEM      
+07c7  WNB           07c8  WNB1          07c2  WNP           041c  WSTART    
 
